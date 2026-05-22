@@ -366,7 +366,7 @@ function getReportHeaders(report: ReportTab) {
   if (report === "Open Graph") return ["URL", "OG Title", "OG Description", "OG URL", "OG Type", "OG Image", "Issues"];
   if (report === "Structured Data") return ["URL", "JSON-LD Blocks", "Invalid Blocks", "Errors"];
   if (report === "Links") return ["Source URL", "Destination URL", "Status", "Final URL", "Anchor Text", "Type", "Followed", "Internal", "Indexable", "Issues"];
-  if (report === "Images") return ["Page URL", "Image URL", "Alt", "Has Alt", "Width", "Height", "Issues"];
+  if (report === "Images") return ["Page URL", "Image URL", "Srcset", "Alt", "Has Alt", "Width", "Height", "Lazy", "Issues"];
   if (report === "Sitemaps") return ["Sitemap URL", "URL", "Status", "Indexable", "Coverage", "Issues"];
   if (report === "PageSpeed") return ["URL", "Mobile Score", "Desktop Score", "LCP", "CLS", "INP", "Issues"];
   return ["URL", "Status", "Depth", "Title", "Description", "Canonical", "Words", "Issues", "Indexable", "Indexability Reasons", "Inlinks", "Outlinks", "Referrers", "Images"];
@@ -467,10 +467,12 @@ function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[]
       <tr key={image.id}>
         <td>{image.pageUrl}</td>
         <td>{image.src || "Missing"}</td>
+        <td>{image.srcset}</td>
         <td>{image.alt}</td>
         <td>{image.hasAltAttribute ? "Yes" : "No"}</td>
         <td>{image.width || "Missing"}</td>
         <td>{image.height || "Missing"}</td>
+        <td>{image.isLazyLoaded ? "Yes" : "No"}</td>
         <td>{image.issues.join(", ")}</td>
       </tr>
     )) : emptyRow(report, "No image records yet. Start a crawl to populate this report.");

@@ -90,10 +90,13 @@ export interface CrawlImage {
   pageUrl: string;
   rawSrc: string;
   src: string;
+  srcset: string;
   alt: string;
   hasAltAttribute: boolean;
   width: string;
   height: string;
+  loading: string;
+  isLazyLoaded: boolean;
   issues: string[];
 }
 

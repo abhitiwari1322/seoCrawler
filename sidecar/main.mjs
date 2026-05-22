@@ -291,27 +291,26 @@ class Crawler {
   extractImages(item, $) {
     const images = [];
     $("img").each((index, element) => {
-      const src = $(element).attr("src") ?? "";
+      const src = pickImageSource($, element);
+      const srcset = clean($(element).attr("srcset") ?? "");
+      const loading = clean($(element).attr("loading") ?? "");
       const alt = $(element).attr("alt");
       const width = clean($(element).attr("width") ?? "");
       const height = clean($(element).attr("height") ?? "");
-      const issues = [];
-
-      if (!src) issues.push("Empty image src");
-      if (alt === undefined) issues.push("Missing alt attribute");
-      if (alt !== undefined && !clean(alt)) issues.push("Empty alt text");
-      if (!width) issues.push("Missing width");
-      if (!height) issues.push("Missing height");
+      const issues = buildImageIssues({ src, alt, width, height });
 
       const image = {
         id: `${item.url}#img-${index}`,
         pageUrl: item.url,
         rawSrc: src,
         src: src ? this.normalize(src, item.url) : "",
+        srcset,
         alt: clean(alt ?? ""),
         hasAltAttribute: alt !== undefined,
         width,
         height,
+        loading,
+        isLazyLoaded: loading.toLowerCase() === "lazy",
         issues
       };
 
@@ -553,6 +552,50 @@ function buildLinkIssues({ href, normalized, anchorText, rel, isInternal }) {
   if (isGenericAnchor(anchorText)) addIssue(issues, "Generic anchor text");
   if (/\bnofollow\b/i.test(rel) && isInternal) addIssue(issues, "Nofollow internal link");
   return issues;
+}
+
+function pickImageSource($, element) {
+  return clean(
+    $(element).attr("src") ??
+      $(element).attr("data-src") ??
+      $(element).attr("data-lazy-src") ??
+      $(element).attr("data-original") ??
+      firstSrcsetCandidate($(element).attr("srcset") ?? "") ??
+      ""
+  );
+}
+
+function firstSrcsetCandidate(srcset) {
+  const firstCandidate = srcset.split(",").map((candidate) => candidate.trim()).find(Boolean);
+  return firstCandidate?.split(/\s+/)[0] ?? "";
+}
+
+function buildImageIssues({ src, alt, width, height }) {
+  const issues = [];
+  const cleanedAlt = clean(alt ?? "");
+
+  if (!src) addIssue(issues, "Empty image src");
+  if (alt === undefined) addIssue(issues, "Missing alt attribute");
+  if (alt !== undefined && !cleanedAlt) addIssue(issues, "Empty alt text");
+  if (isGenericImageAlt(cleanedAlt)) addIssue(issues, "Generic alt text");
+  if (isKeywordStuffedAlt(cleanedAlt)) addIssue(issues, "Possible keyword-stuffed alt text");
+  if (!width) addIssue(issues, "Missing width");
+  if (!height) addIssue(issues, "Missing height");
+  return issues;
+}
+
+function isGenericImageAlt(alt) {
+  const normalized = alt.toLowerCase().trim();
+  return ["image", "photo", "picture", "logo", "banner", "thumbnail"].includes(normalized);
+}
+
+function isKeywordStuffedAlt(alt) {
+  if (!alt) return false;
+  const words = alt.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length < 8) return false;
+  const counts = new Map();
+  for (const word of words) counts.set(word, (counts.get(word) ?? 0) + 1);
+  return Math.max(...counts.values()) >= 4;
 }
 
 function isGenericAnchor(anchorText) {

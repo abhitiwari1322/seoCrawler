@@ -27,6 +27,8 @@ The UI now includes report tabs for Overview, Metadata, Indexability, Headings, 
 
 Phase 3 link and referrer analysis has started. Internal links are enriched after crawl completion with destination status, final URL, destination indexability, broken-link flags, non-indexable destination flags, anchor-text issues, and nofollow-internal-link flags.
 
+Image SEO checks have started. Image extraction now considers `src`, common lazy-load source attributes, and `srcset`; records width, height, lazy-loading state, and flags missing/empty/generic/keyword-stuffed alt text plus missing dimensions.
+
 ## Technology Stack
 
 | Layer | Technology | Current Usage |
@@ -444,6 +446,7 @@ Scoped command binaries/crawler-engine not found
 - XLSX export is not implemented yet.
 - XML sitemap support is not implemented yet.
 - Image SEO extraction is not implemented yet.
+- Image SEO extraction is partially implemented; file size, natural dimensions, and broken image HTTP validation are still pending.
 - External link checking is not implemented yet.
 - Internal link source/destination reports are partially implemented; external link validation and advanced link grouping are still pending.
 - Redirect-chain and redirect-loop detection are not implemented yet.
@@ -470,8 +473,12 @@ Scoped command binaries/crawler-engine not found
 - Add external link validation.
 - Add image SEO checks:
   - missing alt
+  - empty alt
+  - generic alt
+  - keyword-stuffed alt
   - broken images
   - dimensions
+  - lazy-loading state
   - file size
   - oversized image threshold
 - Add XML sitemap import and coverage comparison.
