@@ -28,6 +28,7 @@ class Crawler {
     this.startedAt = 0;
     this.timer = null;
     this.robots = null;
+    this.sitemapUrls = new Set();
     this.titleOccurrences = new Map();
     this.descriptionOccurrences = new Map();
     this.h1Occurrences = new Map();
@@ -45,6 +46,7 @@ class Crawler {
     emit("log", `Started crawl for ${this.root.href}`);
 
     if (settings.respectRobots) await this.loadRobots();
+    await this.loadSitemaps();
 
     this.timer = setInterval(() => this.emitStats(), 500);
     this.pump();
@@ -77,9 +79,60 @@ class Crawler {
       const response = await fetch(robotsUrl, { headers: { "user-agent": this.settings.userAgent } });
       const body = response.ok ? await response.text() : "";
       this.robots = robotsParser(robotsUrl, body);
+      for (const sitemapUrl of extractRobotsSitemaps(body)) this.sitemapUrls.add(sitemapUrl);
       emit("log", response.ok ? "Loaded robots.txt rules." : "No robots.txt found.");
     } catch {
       emit("log", "robots.txt check failed; continuing crawl.");
+    }
+  }
+
+  async loadSitemaps() {
+    this.sitemapUrls.add(new URL("/sitemap.xml", this.origin).href);
+
+    for (const sitemapUrl of Array.from(this.sitemapUrls)) {
+      await this.loadSitemap(sitemapUrl, 0);
+    }
+  }
+
+  async loadSitemap(sitemapUrl, depth) {
+    if (depth > 3 || this.store.loadedSitemaps.has(sitemapUrl)) return;
+    this.store.loadedSitemaps.add(sitemapUrl);
+
+    try {
+      const response = await fetch(sitemapUrl, { headers: { "user-agent": this.settings.userAgent } });
+      if (!response.ok) {
+        emit("log", `Sitemap not available: ${sitemapUrl}`);
+        return;
+      }
+
+      const xml = await response.text();
+      const $ = cheerio.load(xml, { xmlMode: true });
+      const childSitemaps = $("sitemap > loc").map((_, element) => clean($(element).text())).get().filter(Boolean);
+      const urls = $("url > loc").map((_, element) => clean($(element).text())).get().filter(Boolean);
+
+      for (const child of childSitemaps) {
+        const normalizedChild = normalizeOptionalUrl(child, sitemapUrl);
+        if (normalizedChild) await this.loadSitemap(normalizedChild, depth + 1);
+      }
+
+      for (const rawUrl of urls) {
+        const url = this.normalize(rawUrl, sitemapUrl);
+        if (!url || !url.startsWith(this.origin)) continue;
+        const record = {
+          sitemapUrl,
+          url,
+          status: null,
+          indexable: null,
+          coverage: "Not crawled",
+          issues: []
+        };
+        this.store.sitemaps.push(record);
+        emit("sitemap", record);
+      }
+
+      emit("log", `Loaded sitemap ${sitemapUrl} with ${urls.length} URLs.`);
+    } catch {
+      emit("log", `Failed to load sitemap: ${sitemapUrl}`);
     }
   }
 
@@ -337,9 +390,11 @@ class Crawler {
     this.status = "complete";
     this.enrichLinks();
     this.enrichPageLinkCounts();
+    this.enrichSitemaps();
     this.applyDuplicateIssues();
     for (const page of this.pages) emit("page", page);
     for (const link of this.store.links) emit("link", link);
+    for (const sitemap of this.store.sitemaps) emit("sitemap", sitemap);
     emit("status", this.status);
     this.emitStats();
     emit("complete", this.getSummary());
@@ -446,6 +501,20 @@ class Crawler {
     applyDuplicateIssueToPages(this.pages, this.descriptionOccurrences, "Duplicate meta description");
     applyDuplicateIssueToPages(this.pages, this.h1Occurrences, "Duplicate H1");
   }
+
+  enrichSitemaps() {
+    for (const record of this.store.sitemaps) {
+      const page = this.store.pages.get(record.url);
+      record.coverage = page ? "Crawled" : "Not crawled";
+      record.status = page?.status ?? null;
+      record.indexable = page?.indexability?.isIndexable ?? null;
+      record.issues = [];
+
+      if (!page) addIssue(record.issues, "Sitemap URL not crawled");
+      if (page && (!page.status || page.status >= 400)) addIssue(record.issues, "Sitemap URL has HTTP error");
+      if (page?.indexability && !page.indexability.isIndexable) addIssue(record.issues, "Non-indexable URL in sitemap");
+    }
+  }
 }
 
 function createEmptyStore() {
@@ -457,12 +526,21 @@ function createEmptyStore() {
     indexability: new Map(),
     images: [],
     sitemaps: [],
+    loadedSitemaps: new Set(),
     psiResults: new Map()
   };
 }
 
 function clean(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function extractRobotsSitemaps(body) {
+  return String(body)
+    .split(/\r?\n/)
+    .map((line) => line.match(/^\s*sitemap:\s*(.+)\s*$/i)?.[1])
+    .filter(Boolean)
+    .map(clean);
 }
 
 function addIssue(issues, issue) {

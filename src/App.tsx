@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, Download, Pause, Play, Search, Square, Trash2 } from "lucide-react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { EngineClient } from "./engineClient";
-import type { CrawlImage, CrawlLink, CrawlPage, CrawlSettings, CrawlStats, CrawlStatus } from "./types";
+import type { CrawlImage, CrawlLink, CrawlPage, CrawlSettings, CrawlSitemapRecord, CrawlStats, CrawlStatus } from "./types";
 
 const defaultSettings: CrawlSettings = {
   rootUrl: "https://example.com",
@@ -38,6 +38,7 @@ export function App() {
   const [pages, setPages] = useState<CrawlPage[]>([]);
   const [links, setLinks] = useState<CrawlLink[]>([]);
   const [images, setImages] = useState<CrawlImage[]>([]);
+  const [sitemaps, setSitemaps] = useState<CrawlSitemapRecord[]>([]);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [activeReport, setActiveReport] = useState<ReportTab>("Overview");
@@ -86,6 +87,18 @@ export function App() {
       return matchesQuery;
     });
   }, [images, query]);
+
+  const filteredSitemaps = useMemo(() => {
+    const normalizedQuery = query.toLowerCase();
+    return sitemaps.filter((record) => {
+      const matchesQuery =
+        !normalizedQuery ||
+        record.sitemapUrl.toLowerCase().includes(normalizedQuery) ||
+        record.url.toLowerCase().includes(normalizedQuery) ||
+        record.issues.join(" ").toLowerCase().includes(normalizedQuery);
+      return matchesQuery;
+    });
+  }, [sitemaps, query]);
 
   useEffect(() => {
     if (status !== "running") return;
@@ -161,6 +174,17 @@ export function App() {
             return next;
           });
         }
+        if (event.type === "sitemap") {
+          const sitemap = event.payload as CrawlSitemapRecord;
+          setSitemaps((current) => {
+            const existingIndex = current.findIndex((currentSitemap) => currentSitemap.sitemapUrl === sitemap.sitemapUrl && currentSitemap.url === sitemap.url);
+            if (existingIndex === -1) return [sitemap, ...current].slice(0, 5000);
+
+            const next = [...current];
+            next[existingIndex] = sitemap;
+            return next;
+          });
+        }
         if (event.type === "log") setLogs((current) => [String(event.payload), ...current].slice(0, 8));
         if (event.type === "complete") setStatus("complete");
         if (event.type === "error") {
@@ -178,6 +202,7 @@ export function App() {
     setPages([]);
     setLinks([]);
     setImages([]);
+    setSitemaps([]);
     setStats(emptyStats);
     setLogs([]);
     resetTimer();
@@ -193,7 +218,7 @@ export function App() {
 
   const issueCount = pages.reduce((sum, page) => sum + page.issues.length, 0);
   const canClearLogs = logs.length > 0 && status !== "running";
-  const reportRows = getReportRows(activeReport, filteredPages, filteredLinks, filteredImages);
+  const reportRows = getReportRows(activeReport, filteredPages, filteredLinks, filteredImages, filteredSitemaps);
 
   return (
     <main className="app-shell">
@@ -307,7 +332,7 @@ export function App() {
             <Search size={16} />
             <input placeholder="Search current report" value={query} onChange={(event) => setQuery(event.target.value)} />
           </div>
-          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} disabled={activeReport === "Links" || activeReport === "Images"}>
+          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} disabled={activeReport === "Links" || activeReport === "Images" || activeReport === "Sitemaps"}>
             <option value="all">All statuses</option>
             <option value="2">2xx</option>
             <option value="3">3xx</option>
@@ -372,7 +397,7 @@ function getReportHeaders(report: ReportTab) {
   return ["URL", "Status", "Depth", "Title", "Description", "Canonical", "Words", "Issues", "Indexable", "Indexability Reasons", "Inlinks", "Outlinks", "Referrers", "Images"];
 }
 
-function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[], images: CrawlImage[]) {
+function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[], images: CrawlImage[], sitemaps: CrawlSitemapRecord[]) {
   if (report === "Metadata") {
     return pages.map((page) => (
       <tr key={`metadata-${page.url}`}>
@@ -478,7 +503,18 @@ function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[]
     )) : emptyRow(report, "No image records yet. Start a crawl to populate this report.");
   }
 
-  if (report === "Sitemaps") return emptyRow(report, "Sitemap crawling and coverage reports are planned for the sitemap phase.");
+  if (report === "Sitemaps") {
+    return sitemaps.length ? sitemaps.map((record) => (
+      <tr key={`${record.sitemapUrl}-${record.url}`}>
+        <td>{record.sitemapUrl}</td>
+        <td>{record.url}</td>
+        <td>{record.status ?? "Unknown"}</td>
+        <td>{record.indexable === null ? "Unknown" : record.indexable ? "Yes" : "No"}</td>
+        <td>{record.coverage}</td>
+        <td>{record.issues.join(", ")}</td>
+      </tr>
+    )) : emptyRow(report, "No sitemap URLs found yet. Start a crawl to load robots.txt and sitemap.xml.");
+  }
   if (report === "PageSpeed") return emptyRow(report, "PageSpeed Insights reports are planned for the PageSpeed phase.");
 
   return pages.map((page) => (

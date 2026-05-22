@@ -29,6 +29,8 @@ Phase 3 link and referrer analysis has started. Internal links are enriched afte
 
 Image SEO checks have started. Image extraction now considers `src`, common lazy-load source attributes, and `srcset`; records width, height, lazy-loading state, and flags missing/empty/generic/keyword-stuffed alt text plus missing dimensions.
 
+Sitemap support has started. The crawler discovers sitemap URLs from `robots.txt` and `/sitemap.xml`, parses sitemap indexes and URL sets, and enriches sitemap rows after crawl completion with coverage, status, indexability, and sitemap-specific issues.
+
 ## Technology Stack
 
 | Layer | Technology | Current Usage |
@@ -444,7 +446,7 @@ Scoped command binaries/crawler-engine not found
 - Browser preview cannot run crawls; only the Tauri desktop window can spawn the sidecar.
 - SQLite session storage is not implemented yet.
 - XLSX export is not implemented yet.
-- XML sitemap support is not implemented yet.
+- XML sitemap support is partially implemented; sitemap discovery, parsing, and coverage comparison are available, while sitemap import controls and advanced sitemap exports are still pending.
 - Image SEO extraction is not implemented yet.
 - Image SEO extraction is partially implemented; file size, natural dimensions, and broken image HTTP validation are still pending.
 - External link checking is not implemented yet.
@@ -481,7 +483,7 @@ Scoped command binaries/crawler-engine not found
   - lazy-loading state
   - file size
   - oversized image threshold
-- Add XML sitemap import and coverage comparison.
+- Add XML sitemap import controls and advanced coverage exports.
 - Add redirect-chain tracing.
 - Add XLSX export.
 - Replace basic table with TanStack Table.

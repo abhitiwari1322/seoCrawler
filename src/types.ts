@@ -100,6 +100,15 @@ export interface CrawlImage {
   issues: string[];
 }
 
+export interface CrawlSitemapRecord {
+  sitemapUrl: string;
+  url: string;
+  status: number | null;
+  indexable: boolean | null;
+  coverage: string;
+  issues: string[];
+}
+
 export interface CrawlPage {
   url: string;
   finalUrl: string;
@@ -124,6 +133,6 @@ export interface CrawlPage {
 }
 
 export interface CrawlEvent {
-  type: "ready" | "status" | "stats" | "page" | "link" | "image" | "log" | "complete" | "error" | "exported";
+  type: "ready" | "status" | "stats" | "page" | "link" | "image" | "sitemap" | "log" | "complete" | "error" | "exported";
   payload?: unknown;
 }
