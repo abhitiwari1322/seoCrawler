@@ -1,0 +1,484 @@
+# Scout SEO Crawler
+
+Scout SEO Crawler is a lightweight desktop technical SEO crawler. The current build uses a Tauri desktop shell, a React/TypeScript interface, and a Node.js crawler engine packaged as a Tauri sidecar.
+
+The crawler and SEO analysis logic are intentionally Node-only. Tauri still requires a small Rust bootstrap because Tauri apps compile a native desktop shell, but Rust is not used for crawling, parsing, analysis, or reporting.
+
+## Current Status
+
+This repository currently contains a working MVP scaffold with:
+
+- Tauri desktop app shell.
+- React dashboard UI.
+- Node sidecar crawler engine.
+- Sidecar packaging script.
+- Basic crawl controls.
+- Live crawl metrics.
+- Metadata extraction.
+- robots.txt support.
+- CSV export.
+- macOS app and DMG build support.
+
+## Technology Stack
+
+| Layer | Technology | Current Usage |
+| --- | --- | --- |
+| Desktop shell | Tauri v2 | Native desktop window, bundling, sidecar execution |
+| Frontend | React 19 | Main app interface |
+| Language | TypeScript | UI, IPC client, typed crawl models |
+| Build tool | Vite | Frontend dev server and production build |
+| Native bootstrap | Rust | Minimal Tauri app entrypoint only |
+| Crawler engine | Node.js | Queue, fetch, parsing, validation, export |
+| Sidecar packaging | `@yao-pkg/pkg` | Packages the Node crawler into a native sidecar binary |
+| Tauri shell access | `@tauri-apps/plugin-shell` | Starts and communicates with the Node sidecar |
+| HTML parsing | Cheerio | Extracts titles, metadata, headings, links, body text |
+| robots.txt parsing | `robots-parser` | Loads and evaluates crawl allow/disallow rules |
+| Charts | Recharts | Status code distribution chart |
+| Icons | lucide-react | UI icons |
+| Tables | Native table for now | TanStack Table is installed for richer table work later |
+| State management | React state for now | Zustand is installed for larger app state later |
+
+## Folder Structure
+
+```text
+.
+├── README.md
+├── package.json
+├── package-lock.json
+├── index.html
+├── tsconfig.json
+├── vite.config.ts
+├── scripts/
+│   ├── build-sidecar.mjs
+│   └── generate-icons.mjs
+├── sidecar/
+│   ├── main.mjs
+│   └── package.json
+├── src/
+│   ├── App.tsx
+│   ├── engineClient.ts
+│   ├── main.tsx
+│   ├── styles.css
+│   └── types.ts
+└── src-tauri/
+    ├── Cargo.toml
+    ├── Cargo.lock
+    ├── build.rs
+    ├── tauri.conf.json
+    ├── capabilities/
+    │   └── default.json
+    ├── icons/
+    │   ├── icon.png
+    │   ├── 32x32.png
+    │   ├── 128x128.png
+    │   └── 128x128@2x.png
+    └── src/
+        ├── lib.rs
+        └── main.rs
+```
+
+### Important Paths
+
+- `src/App.tsx`: Main dashboard UI and user interactions.
+- `src/engineClient.ts`: Frontend-to-sidecar client using Tauri shell APIs.
+- `src/types.ts`: Shared TypeScript types for crawl settings, status, stats, pages, and events.
+- `sidecar/main.mjs`: Node crawler engine.
+- `scripts/build-sidecar.mjs`: Builds the Node engine into a platform-specific Tauri sidecar binary.
+- `scripts/generate-icons.mjs`: Generates the required Tauri icon files.
+- `src-tauri/src/lib.rs`: Minimal Tauri bootstrap, plugin registration, and startup window focus.
+- `src-tauri/capabilities/default.json`: Tauri permissions for shell sidecar spawn/write/kill.
+- `src-tauri/tauri.conf.json`: Tauri app config, dev URL, bundle settings, sidecar config, and window settings.
+
+## Architecture
+
+The application has three main parts:
+
+1. Tauri desktop shell
+2. React frontend
+3. Node crawler sidecar
+
+```mermaid
+flowchart LR
+  User["User"] --> UI["React + TypeScript UI"]
+  UI --> Client["EngineClient"]
+  Client --> Shell["Tauri Shell Plugin"]
+  Shell --> Sidecar["Node Crawler Sidecar"]
+  Sidecar --> Web["Target Website"]
+  Sidecar --> Parser["Cheerio + robots-parser"]
+  Parser --> Sidecar
+  Sidecar --> Client
+  Client --> UI
+```
+
+### Tauri Shell
+
+Tauri provides:
+
+- Native desktop window.
+- macOS app and DMG packaging.
+- Sidecar binary bundling.
+- Secure permission-scoped access to system process APIs.
+
+The Rust code is intentionally tiny. It registers the shell plugin, centers and focuses the main window, and starts the Tauri runtime.
+
+### React Frontend
+
+The frontend handles:
+
+- Crawl settings form.
+- Start, pause, stop, and export controls.
+- Crawl status display.
+- Metrics cards.
+- Status chart.
+- Logs.
+- Search and status filtering.
+- Results table.
+
+The browser preview at `http://127.0.0.1:1420/` can render the UI, but it cannot run the crawler because normal browsers cannot access Tauri sidecar APIs. To crawl, use the Tauri desktop window launched by `npm run tauri:dev`.
+
+### Node Sidecar
+
+The Node sidecar is the crawler engine. It is packaged into `src-tauri/binaries/crawler-engine-<target>` by `scripts/build-sidecar.mjs`.
+
+The sidecar communicates with the UI through newline-delimited JSON over stdin/stdout:
+
+- UI sends commands to sidecar stdin.
+- Sidecar emits events on stdout.
+- UI parses events and updates the dashboard.
+
+Example command:
+
+```json
+{"type":"start","payload":{"rootUrl":"https://example.com","maxUrls":500}}
+```
+
+Example event:
+
+```json
+{"type":"page","payload":{"url":"https://example.com","status":200,"title":"Example Domain"}}
+```
+
+## Runtime Workflow
+
+### Development Startup
+
+Run:
+
+```bash
+npm run tauri:dev
+```
+
+This performs:
+
+1. `npm run build:icons`
+   - Generates required Tauri icon files.
+2. `npm run build:sidecar`
+   - Packages `sidecar/main.mjs` into a native sidecar binary.
+3. `tauri dev`
+   - Starts Vite through `beforeDevCommand`.
+   - Starts Cargo/Tauri.
+   - Opens the desktop app window.
+
+Do not run `npm run dev` separately before `npm run tauri:dev`, because Tauri already starts the Vite server. Running both can cause a port conflict on `127.0.0.1:1420`.
+
+### Production Build
+
+Run:
+
+```bash
+npm run tauri:build
+```
+
+This performs:
+
+1. Generate icons.
+2. Build Node sidecar.
+3. Build React frontend.
+4. Compile Tauri native app.
+5. Bundle macOS `.app` and `.dmg`.
+
+Current macOS build outputs:
+
+```text
+src-tauri/target/release/bundle/macos/Scout SEO Crawler.app
+src-tauri/target/release/bundle/dmg/Scout SEO Crawler_0.1.0_aarch64.dmg
+```
+
+## Crawl Workflow
+
+1. User enters crawl settings in the Tauri desktop app:
+   - Root URL
+   - URL limit
+   - Max depth
+   - Concurrency
+   - Delay
+   - User agent
+   - robots.txt setting
+2. User clicks Start.
+3. React calls `EngineClient.start(settings)`.
+4. `EngineClient` starts the Tauri sidecar if needed.
+5. UI sends a `start` command to the Node sidecar.
+6. Sidecar initializes:
+   - Root URL
+   - Origin boundary
+   - Queue
+   - Seen URL set
+   - Duplicate maps
+   - robots.txt parser when enabled
+7. Sidecar crawls pages concurrently.
+8. For each HTML page, sidecar extracts metadata and discovers links.
+9. Sidecar emits page, stats, status, log, and completion events.
+10. React updates metrics, logs, chart, and results table in real time.
+11. User can pause, resume, stop, search, filter, or export CSV.
+
+## Implemented Functionality
+
+### Crawl Engine
+
+- Start crawl from a root URL.
+- Discover internal links from `<a href>`.
+- Resolve relative URLs.
+- Normalize URLs:
+  - Removes hash fragments.
+  - Removes trailing slash except root.
+- Stay within the root origin.
+- Prevent duplicate URL crawling.
+- Track crawl depth.
+- Respect max URL limit.
+- Respect max depth.
+- Concurrent crawling.
+- Configurable concurrency.
+- Configurable delay between queue pumps.
+- Request timeout handling.
+- Pause crawl.
+- Resume crawl.
+- Stop crawl.
+- Real-time crawl stats.
+
+### HTTP Analysis
+
+- Captures final URL after redirects.
+- Captures HTTP status code.
+- Tracks failed requests.
+- Flags HTTP error pages.
+- Tracks total error count.
+
+Current limitation: redirect-chain and redirect-loop reports are not implemented yet. Fetch follows redirects and records the final URL.
+
+### Metadata Extraction
+
+Extracted from HTML pages:
+
+- Page title.
+- Meta description.
+- Canonical URL.
+- H1 headings.
+- H2 headings.
+- Body word count.
+- Content type.
+
+Current validation rules:
+
+- Missing title.
+- Short title.
+- Long title.
+- Missing meta description.
+- Long meta description.
+- Missing H1.
+- Multiple H1s.
+- Thin content.
+- Duplicate title.
+- Duplicate meta description.
+- Duplicate H1.
+- HTTP error.
+- Request failed.
+
+### robots.txt Support
+
+- Attempts to load `/robots.txt`.
+- Parses rules with `robots-parser`.
+- Applies rules for the configured user agent.
+- Skips blocked URLs.
+- Logs blocked URLs.
+
+### Dashboard
+
+- Crawl status:
+  - idle
+  - running
+  - paused
+  - stopped
+  - complete
+  - error
+- Metrics:
+  - Discovered URLs
+  - Crawled URLs
+  - Queue size
+  - Active requests
+  - Errors
+  - Issues
+  - URLs per second
+- Status distribution chart.
+- Crawl logs.
+- Search URLs and titles.
+- Filter by status group:
+  - all
+  - 2xx
+  - 3xx
+  - 4xx
+  - 5xx
+- Results table:
+  - URL
+  - Status
+  - Depth
+  - Title
+  - Description
+  - Word count
+  - Issues
+
+### Export
+
+- CSV export for crawled page data.
+- Export includes:
+  - URL
+  - Final URL
+  - Status
+  - Depth
+  - Title
+  - Description
+  - Canonical
+  - Word count
+  - Issues
+
+Current export location is the system temp directory:
+
+```text
+<temp>/scout-seo-exports/
+```
+
+## Tauri Permissions
+
+The app uses `@tauri-apps/plugin-shell` to spawn the crawler sidecar. Permissions live in:
+
+```text
+src-tauri/capabilities/default.json
+```
+
+The sidecar must be scoped for both execute and spawn:
+
+```json
+{
+  "identifier": "shell:allow-spawn",
+  "allow": [
+    {
+      "name": "binaries/crawler-engine",
+      "sidecar": true,
+      "args": true
+    }
+  ]
+}
+```
+
+Without this scope, Tauri rejects the sidecar with:
+
+```text
+Scoped command binaries/crawler-engine not found
+```
+
+## Known Limitations
+
+- Browser preview cannot run crawls; only the Tauri desktop window can spawn the sidecar.
+- SQLite session storage is not implemented yet.
+- XLSX export is not implemented yet.
+- XML sitemap support is not implemented yet.
+- Image SEO extraction is not implemented yet.
+- External link checking is not implemented yet.
+- Internal link source/destination reports are not fully implemented yet.
+- Redirect-chain and redirect-loop detection are not implemented yet.
+- JavaScript rendering is intentionally excluded from Phase 1.
+- AI analysis is intentionally excluded from Phase 1.
+- Cloud sync and collaboration are intentionally excluded from Phase 1.
+
+## Roadmap
+
+### Next Engineering Targets
+
+- Add SQLite session storage.
+- Add crawl autosave and reopen previous crawl.
+- Add full internal link graph:
+  - source URL
+  - destination URL
+  - anchor text
+  - follow/nofollow
+  - incoming count
+  - outgoing count
+- Add external link validation.
+- Add image SEO checks:
+  - missing alt
+  - broken images
+  - dimensions
+  - file size
+  - oversized image threshold
+- Add XML sitemap import and coverage comparison.
+- Add redirect-chain tracing.
+- Add XLSX export.
+- Replace basic table with TanStack Table.
+- Move larger app state into Zustand.
+- Add report-specific export screens.
+
+## Useful Commands
+
+```bash
+npm install
+npm run tauri:dev
+npm run build
+npm run build:icons
+npm run build:sidecar
+npm run tauri:build
+```
+
+## Troubleshooting
+
+### Port 1420 Already In Use
+
+Cause: Vite is already running.
+
+Fix:
+
+```bash
+lsof -nP -iTCP:1420 -sTCP:LISTEN
+kill <PID>
+npm run tauri:dev
+```
+
+### Browser Preview Shows an Error
+
+The browser preview at `http://127.0.0.1:1420/` cannot spawn Tauri sidecars. Use the Tauri desktop window for crawl testing.
+
+### Missing Cargo
+
+Tauri requires Rust/Cargo to build the native shell.
+
+Install Rust:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Then restart the terminal and check:
+
+```bash
+cargo --version
+```
+
+### Missing Tauri Icon
+
+Run:
+
+```bash
+npm run build:icons
+```
+
+### Scoped Command Not Found
+
+Ensure `src-tauri/capabilities/default.json` scopes `binaries/crawler-engine` under `shell:allow-spawn`.

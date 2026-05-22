@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Scout SEO Crawler",
+  "version": "0.1.0",
+  "identifier": "com.scoutseo.crawler",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Scout SEO Crawler",
+        "width": 1320,
+        "height": 860,
+        "minWidth": 1000,
+        "minHeight": 720,
+        "center": true,
+        "visible": true,
+        "focus": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "externalBin": ["binaries/crawler-engine"],
+    "icon": []
+  }
+}

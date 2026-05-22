@@ -1,0 +1,18 @@
+[package]
+name = "scout-seo-crawler"
+version = "0.1.0"
+description = "A lightweight desktop SEO crawler"
+authors = ["Scout SEO"]
+edition = "2021"
+
+[lib]
+name = "scout_seo_crawler_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+
