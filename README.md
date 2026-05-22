@@ -19,6 +19,8 @@ This repository currently contains a working MVP scaffold with:
 - CSV export.
 - macOS app and DMG build support.
 
+Phase 1 data-model foundation is now in place. The Node sidecar keeps structured in-memory stores for pages, links, headings, metadata, indexability, images, sitemaps, and PageSpeed results. Some later report types are still placeholders, but the architecture now has the right data buckets for the next phases.
+
 ## Technology Stack
 
 | Layer | Technology | Current Usage |
@@ -254,6 +256,15 @@ src-tauri/target/release/bundle/dmg/Scout SEO Crawler_0.1.0_aarch64.dmg
 - Resume crawl.
 - Stop crawl.
 - Real-time crawl stats.
+- Structured in-memory crawl stores:
+  - pages
+  - links
+  - headings
+  - metadata
+  - indexability
+  - images
+  - sitemaps
+  - PageSpeed results
 
 ### HTTP Analysis
 
@@ -272,8 +283,14 @@ Extracted from HTML pages:
 - Page title.
 - Meta description.
 - Canonical URL.
+- Meta robots.
+- X-Robots-Tag.
 - H1 headings.
 - H2 headings.
+- H1-H6 heading list.
+- Open Graph tags.
+- Twitter Card tags.
+- JSON-LD structured data blocks.
 - Body word count.
 - Content type.
 
@@ -335,6 +352,11 @@ Current validation rules:
   - Description
   - Word count
   - Issues
+  - Indexable
+  - Inlinks
+  - Outlinks
+  - Referrers
+  - Image count
 
 ### Export
 

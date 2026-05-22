@@ -17,8 +17,48 @@ export interface CrawlStats {
   queued: number;
   active: number;
   errors: number;
+  links?: number;
+  images?: number;
   urlsPerSecond: number;
   durationMs: number;
+}
+
+export interface CrawlHeading {
+  order: number;
+  level: number;
+  text: string;
+}
+
+export interface StructuredDataBlock {
+  id: string;
+  type: "json-ld" | "microdata" | "rdfa";
+  valid: boolean;
+  data: unknown;
+  errors: string[];
+}
+
+export interface CrawlMetadata {
+  title: string;
+  description: string;
+  canonical: string;
+  robotsMeta: string;
+  xRobotsTag: string;
+  openGraph: Record<string, string[]>;
+  twitter: Record<string, string[]>;
+  structuredData: {
+    jsonLd: StructuredDataBlock[];
+  };
+}
+
+export interface CrawlIndexability {
+  isIndexable: boolean;
+  hasNoindex: boolean;
+  hasNofollow: boolean;
+  robotsMeta: string;
+  xRobotsTag: string;
+  canonical: string;
+  canonicalized: boolean;
+  reasons: string[];
 }
 
 export interface CrawlPage {
@@ -32,9 +72,16 @@ export interface CrawlPage {
   canonical: string;
   h1: string[];
   h2: string[];
+  headings?: CrawlHeading[];
+  metadata?: CrawlMetadata;
+  indexability?: CrawlIndexability;
   wordCount: number;
   issues: string[];
   discoveredFrom?: string;
+  referrerUrls?: string[];
+  incomingInternalLinks?: number;
+  outgoingInternalLinks?: number;
+  imageCount?: number;
 }
 
 export interface CrawlEvent {

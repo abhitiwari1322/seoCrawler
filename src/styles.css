@@ -203,12 +203,45 @@ button:disabled {
   padding: 12px;
 }
 
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 34px;
+  margin-bottom: 4px;
+  color: #42505c;
+}
+
+.icon-button {
+  width: 34px;
+  min-height: 34px;
+  padding: 0;
+  color: #42505c;
+  background: transparent;
+}
+
+.icon-button:hover:not(:disabled) {
+  background: #edf3f0;
+}
+
+.icon-button:disabled {
+  opacity: 0.35;
+}
+
+.log-list {
+  overflow: auto;
+}
+
 .log-panel p {
   margin: 0;
   padding: 10px 0;
   border-bottom: 1px solid #edf1f5;
   color: #42505c;
   font-size: 13px;
+}
+
+.log-panel .empty-log {
+  color: #8a97a3;
 }
 
 .filters {
@@ -241,7 +274,7 @@ button:disabled {
 
 table {
   width: 100%;
-  min-width: 980px;
+  min-width: 1320px;
   border-collapse: collapse;
   font-size: 13px;
 }

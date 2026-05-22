@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { Activity, Download, Pause, Play, Search, Square } from "lucide-react";
+import { Activity, Download, Pause, Play, Search, Square, Trash2 } from "lucide-react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { EngineClient } from "./engineClient";
 import type { CrawlPage, CrawlSettings, CrawlStats, CrawlStatus } from "./types";
@@ -61,7 +61,17 @@ export function App() {
       engine.subscribe((event) => {
         if (event.type === "status") setStatus(event.payload as CrawlStatus);
         if (event.type === "stats") setStats(event.payload as CrawlStats);
-        if (event.type === "page") setPages((current) => [event.payload as CrawlPage, ...current].slice(0, 1000));
+        if (event.type === "page") {
+          const page = event.payload as CrawlPage;
+          setPages((current) => {
+            const existingIndex = current.findIndex((currentPage) => currentPage.url === page.url);
+            if (existingIndex === -1) return [page, ...current].slice(0, 1000);
+
+            const next = [...current];
+            next[existingIndex] = page;
+            return next;
+          });
+        }
         if (event.type === "log") setLogs((current) => [String(event.payload), ...current].slice(0, 8));
         if (event.type === "complete") setStatus("complete");
         if (event.type === "error") {
@@ -78,6 +88,7 @@ export function App() {
   async function startCrawl() {
     setPages([]);
     setStats(emptyStats);
+    setLogs([]);
     try {
       const engine = await ensureEngine();
       engine.start(settings);
@@ -89,6 +100,7 @@ export function App() {
   }
 
   const issueCount = pages.reduce((sum, page) => sum + page.issues.length, 0);
+  const canClearLogs = logs.length > 0 && status !== "running";
 
   return (
     <main className="app-shell">
@@ -184,7 +196,15 @@ export function App() {
           </div>
 
           <div className="log-panel">
-            {logs.map((log, index) => <p key={`${log}-${index}`}>{log}</p>)}
+            <div className="panel-header">
+              <strong>Logs</strong>
+              <button className="icon-button" onClick={() => setLogs([])} disabled={!canClearLogs} title="Clear logs">
+                <Trash2 size={16} />
+              </button>
+            </div>
+            <div className="log-list">
+              {logs.length === 0 ? <p className="empty-log">No logs yet.</p> : logs.map((log, index) => <p key={`${log}-${index}`}>{log}</p>)}
+            </div>
           </div>
         </section>
 
@@ -213,6 +233,11 @@ export function App() {
                 <th>Description</th>
                 <th>Words</th>
                 <th>Issues</th>
+                <th>Indexable</th>
+                <th>Inlinks</th>
+                <th>Outlinks</th>
+                <th>Referrers</th>
+                <th>Images</th>
               </tr>
             </thead>
             <tbody>
@@ -225,6 +250,11 @@ export function App() {
                   <td>{page.description || "Missing"}</td>
                   <td>{page.wordCount}</td>
                   <td>{page.issues.join(", ")}</td>
+                  <td>{page.indexability ? (page.indexability.isIndexable ? "Yes" : "No") : "Unknown"}</td>
+                  <td>{page.incomingInternalLinks ?? 0}</td>
+                  <td>{page.outgoingInternalLinks ?? 0}</td>
+                  <td>{page.referrerUrls?.join(", ") ?? ""}</td>
+                  <td>{page.imageCount ?? 0}</td>
                 </tr>
               ))}
             </tbody>
