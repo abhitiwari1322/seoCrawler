@@ -28,9 +28,9 @@ class Crawler {
     this.startedAt = 0;
     this.timer = null;
     this.robots = null;
-    this.titleMap = new Map();
-    this.descriptionMap = new Map();
-    this.h1Map = new Map();
+    this.titleOccurrences = new Map();
+    this.descriptionOccurrences = new Map();
+    this.h1Occurrences = new Map();
   }
 
   async start(settings) {
@@ -170,9 +170,12 @@ class Crawler {
 
   extractPage(item, response, html, contentType) {
     const $ = cheerio.load(html || "");
-    const title = clean($("title").first().text());
-    const description = clean($('meta[name="description"]').attr("content") ?? "");
-    const canonical = normalizeOptionalUrl(clean($('link[rel="canonical"]').attr("href") ?? ""), item.url);
+    const titleTags = $("title").map((_, el) => clean($(el).text())).get().filter(Boolean);
+    const descriptionTags = $('meta[name="description"]').map((_, el) => clean($(el).attr("content") ?? "")).get();
+    const canonicalTags = $('link[rel="canonical"]').map((_, el) => clean($(el).attr("href") ?? "")).get();
+    const title = titleTags[0] ?? "";
+    const description = clean(descriptionTags.find(Boolean) ?? "");
+    const canonical = normalizeOptionalUrl(clean(canonicalTags.find(Boolean) ?? ""), item.url);
     const h1 = $("h1").map((_, el) => clean($(el).text())).get().filter(Boolean);
     const h2 = $("h2").map((_, el) => clean($(el).text())).get().filter(Boolean);
     const headings = extractHeadings($);
@@ -193,19 +196,24 @@ class Crawler {
     });
 
     const issues = [];
-    if (response.status >= 400) issues.push("HTTP error");
-    if (!title) issues.push("Missing title");
-    if (title && title.length < 30) issues.push("Short title");
-    if (title.length > 60) issues.push("Long title");
-    if (!description) issues.push("Missing meta description");
-    if (description.length > 160) issues.push("Long meta description");
-    if (h1.length === 0) issues.push("Missing H1");
-    if (h1.length > 1) issues.push("Multiple H1s");
-    if (wordCount > 0 && wordCount < this.settings.minWordCount) issues.push("Thin content");
+    if (response.status >= 400) addIssue(issues, "HTTP error");
+    validateMetadataIssues({
+      issues,
+      title,
+      titleCount: titleTags.length,
+      description,
+      descriptionCount: descriptionTags.length,
+      h1,
+      wordCount,
+      minWordCount: this.settings.minWordCount
+    });
+    validateCanonicalIssues({ issues, canonical, canonicalCount: canonicalTags.length, pageUrl: item.url, finalUrl: response.url, origin: this.origin });
+    validateHeadingHierarchy(issues, headings);
+    validateOpenGraphIssues(issues, openGraph);
 
-    addDuplicateIssue(this.titleMap, title, "Duplicate title", issues);
-    addDuplicateIssue(this.descriptionMap, description, "Duplicate meta description", issues);
-    addDuplicateIssue(this.h1Map, h1[0] ?? "", "Duplicate H1", issues);
+    addOccurrence(this.titleOccurrences, title, item.url);
+    addOccurrence(this.descriptionOccurrences, description, item.url);
+    addOccurrence(this.h1Occurrences, h1[0] ?? "", item.url);
 
     const pageImages = this.extractImages(item, $);
 
@@ -227,6 +235,12 @@ class Crawler {
         canonical,
         robotsMeta,
         xRobotsTag,
+        counts: {
+          titles: titleTags.length,
+          descriptions: descriptionTags.length,
+          canonicals: canonicalTags.length,
+          h1: h1.length
+        },
         openGraph,
         twitter,
         structuredData
@@ -266,6 +280,7 @@ class Crawler {
       };
 
       this.store.links.push(link);
+      emit("link", link);
       if (isInternal) this.enqueue(href, item.depth + 1, item.url, item.url);
     });
   }
@@ -298,6 +313,7 @@ class Crawler {
       };
 
       this.store.images.push(image);
+      emit("image", image);
       images.push(image);
     });
 
@@ -318,6 +334,7 @@ class Crawler {
     if (this.timer) clearInterval(this.timer);
     this.status = "complete";
     this.enrichPageLinkCounts();
+    this.applyDuplicateIssues();
     for (const page of this.pages) emit("page", page);
     emit("status", this.status);
     this.emitStats();
@@ -399,6 +416,12 @@ class Crawler {
       psiResults: this.store.psiResults.size
     };
   }
+
+  applyDuplicateIssues() {
+    applyDuplicateIssueToPages(this.pages, this.titleOccurrences, "Duplicate title");
+    applyDuplicateIssueToPages(this.pages, this.descriptionOccurrences, "Duplicate meta description");
+    applyDuplicateIssueToPages(this.pages, this.h1Occurrences, "Duplicate H1");
+  }
 }
 
 function createEmptyStore() {
@@ -416,6 +439,84 @@ function createEmptyStore() {
 
 function clean(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function addIssue(issues, issue) {
+  if (!issues.includes(issue)) issues.push(issue);
+}
+
+function addOccurrence(map, value, url) {
+  if (!value) return;
+  const key = value.toLowerCase();
+  if (!map.has(key)) map.set(key, { value, urls: new Set() });
+  map.get(key).urls.add(url);
+}
+
+function applyDuplicateIssueToPages(pages, occurrences, issue) {
+  const duplicateUrls = new Set();
+
+  for (const occurrence of occurrences.values()) {
+    if (occurrence.urls.size <= 1) continue;
+    for (const url of occurrence.urls) duplicateUrls.add(url);
+  }
+
+  for (const page of pages) {
+    if (duplicateUrls.has(page.url)) addIssue(page.issues, issue);
+  }
+}
+
+function validateMetadataIssues({ issues, title, titleCount, description, descriptionCount, h1, wordCount, minWordCount }) {
+  if (!title) addIssue(issues, "Missing title");
+  if (titleCount > 1) addIssue(issues, "Multiple title tags");
+  if (title && title.length < 30) addIssue(issues, "Short title");
+  if (title.length > 60) addIssue(issues, "Long title");
+  if (!description) addIssue(issues, "Missing meta description");
+  if (descriptionCount > 1) addIssue(issues, "Multiple meta descriptions");
+  if (description.length > 160) addIssue(issues, "Long meta description");
+  if (h1.length === 0) addIssue(issues, "Missing H1");
+  if (h1.length > 1) addIssue(issues, "Multiple H1s");
+  if (wordCount > 0 && wordCount < minWordCount) addIssue(issues, "Thin content");
+}
+
+function validateCanonicalIssues({ issues, canonical, canonicalCount, pageUrl, finalUrl, origin }) {
+  if (!canonical) {
+    addIssue(issues, "Missing canonical");
+    return;
+  }
+
+  if (canonicalCount > 1) addIssue(issues, "Multiple canonicals");
+
+  const canonicalOrigin = safeOrigin(canonical);
+  if (!canonicalOrigin) addIssue(issues, "Invalid canonical");
+  if (canonicalOrigin && canonicalOrigin !== origin) addIssue(issues, "Canonical points outside site");
+  if (canonical !== pageUrl && canonical !== finalUrl) addIssue(issues, "Canonicalized URL");
+  if (canonical.includes("#")) addIssue(issues, "Canonical contains fragment");
+}
+
+function validateHeadingHierarchy(issues, headings) {
+  if (headings.length === 0) return;
+  if (headings[0].level !== 1) addIssue(issues, "First heading is not H1");
+
+  for (let index = 1; index < headings.length; index += 1) {
+    const previous = headings[index - 1];
+    const current = headings[index];
+    if (current.level - previous.level > 1) {
+      addIssue(issues, "Non-sequential heading hierarchy");
+      return;
+    }
+  }
+}
+
+function validateOpenGraphIssues(issues, openGraph) {
+  const required = ["og:title", "og:description", "og:url", "og:type", "og:image"];
+  const missing = required.filter((property) => !openGraph[property]?.some(Boolean));
+  if (missing.length > 0) addIssue(issues, "Missing Open Graph tags");
+
+  for (const [property, values] of Object.entries(openGraph)) {
+    if (values.length > 1) {
+      addIssue(issues, `Duplicate ${property}`);
+    }
+  }
 }
 
 function normalizeOptionalUrl(value, baseUrl) {
@@ -518,13 +619,6 @@ function classifyLink($, element) {
   if ($(element).closest("footer").length > 0) return "footer";
   if ($(element).closest("header").length > 0) return "header";
   return "body";
-}
-
-function addDuplicateIssue(map, value, issue, issues) {
-  if (!value) return;
-  const count = (map.get(value) ?? 0) + 1;
-  map.set(value, count);
-  if (count > 1) issues.push(issue);
 }
 
 function toCsvRow(row) {

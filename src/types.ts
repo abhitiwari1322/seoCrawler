@@ -43,6 +43,12 @@ export interface CrawlMetadata {
   canonical: string;
   robotsMeta: string;
   xRobotsTag: string;
+  counts: {
+    titles: number;
+    descriptions: number;
+    canonicals: number;
+    h1: number;
+  };
   openGraph: Record<string, string[]>;
   twitter: Record<string, string[]>;
   structuredData: {
@@ -59,6 +65,33 @@ export interface CrawlIndexability {
   canonical: string;
   canonicalized: boolean;
   reasons: string[];
+}
+
+export interface CrawlLink {
+  id: string;
+  sourceUrl: string;
+  rawHref: string;
+  destinationUrl: string;
+  normalizedDestinationUrl: string;
+  anchorText: string;
+  rel: string;
+  isFollowed: boolean;
+  isInternal: boolean;
+  depth: number;
+  linkType: string;
+  issues: string[];
+}
+
+export interface CrawlImage {
+  id: string;
+  pageUrl: string;
+  rawSrc: string;
+  src: string;
+  alt: string;
+  hasAltAttribute: boolean;
+  width: string;
+  height: string;
+  issues: string[];
 }
 
 export interface CrawlPage {
@@ -85,6 +118,6 @@ export interface CrawlPage {
 }
 
 export interface CrawlEvent {
-  type: "ready" | "status" | "stats" | "page" | "log" | "complete" | "error" | "exported";
+  type: "ready" | "status" | "stats" | "page" | "link" | "image" | "log" | "complete" | "error" | "exported";
   payload?: unknown;
 }

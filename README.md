@@ -21,6 +21,10 @@ This repository currently contains a working MVP scaffold with:
 
 Phase 1 data-model foundation is now in place. The Node sidecar keeps structured in-memory stores for pages, links, headings, metadata, indexability, images, sitemaps, and PageSpeed results. Some later report types are still placeholders, but the architecture now has the right data buckets for the next phases.
 
+Phase 2 metadata and indexability validation has started. The crawler now adds issue flags for canonical problems, duplicate metadata across all affected pages, non-sequential heading hierarchy, missing/duplicate Open Graph tags, and robots/canonical indexability reasons.
+
+The UI now includes report tabs for Overview, Metadata, Indexability, Headings, Open Graph, Structured Data, Links, Images, Sitemaps, and PageSpeed. Sitemap and PageSpeed tabs are placeholders until their implementation phases; the other tabs are populated from current crawl data.
+
 ## Technology Stack
 
 | Layer | Technology | Current Usage |
@@ -297,12 +301,23 @@ Extracted from HTML pages:
 Current validation rules:
 
 - Missing title.
+- Multiple title tags.
 - Short title.
 - Long title.
 - Missing meta description.
+- Multiple meta descriptions.
 - Long meta description.
 - Missing H1.
 - Multiple H1s.
+- Missing canonical.
+- Multiple canonicals.
+- Invalid canonical.
+- Canonical points outside site.
+- Canonicalized URL.
+- First heading is not H1.
+- Non-sequential heading hierarchy.
+- Missing Open Graph tags.
+- Duplicate Open Graph tags.
 - Thin content.
 - Duplicate title.
 - Duplicate meta description.
@@ -350,13 +365,26 @@ Current validation rules:
   - Depth
   - Title
   - Description
+  - Canonical
   - Word count
   - Issues
   - Indexable
+  - Indexability reasons
   - Inlinks
   - Outlinks
   - Referrers
   - Image count
+- Report tabs:
+  - Overview
+  - Metadata
+  - Indexability
+  - Headings
+  - Open Graph
+  - Structured Data
+  - Links
+  - Images
+  - Sitemaps
+  - PageSpeed
 
 ### Export
 

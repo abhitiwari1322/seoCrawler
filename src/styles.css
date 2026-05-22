@@ -158,6 +158,21 @@ button:disabled {
   background: #c67b19;
 }
 
+.crawl-timer {
+  display: inline-flex;
+  min-width: 58px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #d7e0e7;
+  border-radius: 999px;
+  padding: 4px 10px;
+  color: #42505c;
+  background: #fff;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
 .metrics {
   display: grid;
   grid-template-columns: repeat(6, minmax(110px, 1fr));
@@ -248,6 +263,31 @@ button:disabled {
   margin-bottom: 12px;
 }
 
+.report-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.report-tabs button {
+  min-height: 38px;
+  flex: 0 0 auto;
+  border: 1px solid #d7e0e7;
+  padding: 0 13px;
+  color: #42505c;
+  background: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.report-tabs button.active {
+  border-color: #23745a;
+  color: #fff;
+  background: #23745a;
+}
+
 .searchbox {
   display: flex;
   width: min(520px, 100%);
@@ -274,7 +314,7 @@ button:disabled {
 
 table {
   width: 100%;
-  min-width: 1320px;
+  min-width: 1500px;
   border-collapse: collapse;
   font-size: 13px;
 }
