@@ -365,7 +365,7 @@ function getReportHeaders(report: ReportTab) {
   if (report === "Headings") return ["URL", "H1 Count", "H2 Count", "Heading Path", "Issues"];
   if (report === "Open Graph") return ["URL", "OG Title", "OG Description", "OG URL", "OG Type", "OG Image", "Issues"];
   if (report === "Structured Data") return ["URL", "JSON-LD Blocks", "Invalid Blocks", "Errors"];
-  if (report === "Links") return ["Source URL", "Destination URL", "Anchor Text", "Type", "Followed", "Internal", "Issues"];
+  if (report === "Links") return ["Source URL", "Destination URL", "Status", "Final URL", "Anchor Text", "Type", "Followed", "Internal", "Indexable", "Issues"];
   if (report === "Images") return ["Page URL", "Image URL", "Alt", "Has Alt", "Width", "Height", "Issues"];
   if (report === "Sitemaps") return ["Sitemap URL", "URL", "Status", "Indexable", "Coverage", "Issues"];
   if (report === "PageSpeed") return ["URL", "Mobile Score", "Desktop Score", "LCP", "CLS", "INP", "Issues"];
@@ -450,10 +450,13 @@ function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[]
       <tr key={link.id}>
         <td>{link.sourceUrl}</td>
         <td>{link.destinationUrl || "Missing"}</td>
+        <td>{link.destinationStatus ?? "Unknown"}</td>
+        <td>{link.finalDestinationUrl || ""}</td>
         <td>{link.anchorText}</td>
         <td>{link.linkType}</td>
         <td>{link.isFollowed ? "Yes" : "No"}</td>
         <td>{link.isInternal ? "Yes" : "No"}</td>
+        <td>{link.destinationIndexable === null ? "Unknown" : link.destinationIndexable ? "Yes" : "No"}</td>
         <td>{link.issues.join(", ")}</td>
       </tr>
     )) : emptyRow(report, "No link records yet. Start a crawl to populate this report.");

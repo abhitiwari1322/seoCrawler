@@ -25,6 +25,8 @@ Phase 2 metadata and indexability validation has started. The crawler now adds i
 
 The UI now includes report tabs for Overview, Metadata, Indexability, Headings, Open Graph, Structured Data, Links, Images, Sitemaps, and PageSpeed. Sitemap and PageSpeed tabs are placeholders until their implementation phases; the other tabs are populated from current crawl data.
 
+Phase 3 link and referrer analysis has started. Internal links are enriched after crawl completion with destination status, final URL, destination indexability, broken-link flags, non-indexable destination flags, anchor-text issues, and nofollow-internal-link flags.
+
 ## Technology Stack
 
 | Layer | Technology | Current Usage |
@@ -443,7 +445,7 @@ Scoped command binaries/crawler-engine not found
 - XML sitemap support is not implemented yet.
 - Image SEO extraction is not implemented yet.
 - External link checking is not implemented yet.
-- Internal link source/destination reports are not fully implemented yet.
+- Internal link source/destination reports are partially implemented; external link validation and advanced link grouping are still pending.
 - Redirect-chain and redirect-loop detection are not implemented yet.
 - JavaScript rendering is intentionally excluded from Phase 1.
 - AI analysis is intentionally excluded from Phase 1.
@@ -460,6 +462,9 @@ Scoped command binaries/crawler-engine not found
   - destination URL
   - anchor text
   - follow/nofollow
+  - destination status
+  - destination indexability
+  - broken internal link flags
   - incoming count
   - outgoing count
 - Add external link validation.

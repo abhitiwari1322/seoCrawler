@@ -270,13 +270,16 @@ class Crawler {
         rawHref: href,
         destinationUrl: normalized,
         normalizedDestinationUrl: normalized,
+        finalDestinationUrl: "",
+        destinationStatus: null,
+        destinationIndexable: null,
         anchorText: clean($(element).text()),
         rel,
         isFollowed: !/\bnofollow\b/i.test(rel),
         isInternal,
         depth: item.depth + 1,
         linkType: classifyLink($, element),
-        issues: href ? [] : ["Missing href"]
+        issues: buildLinkIssues({ href, normalized, anchorText: clean($(element).text()), rel, isInternal })
       };
 
       this.store.links.push(link);
@@ -333,9 +336,11 @@ class Crawler {
   finish() {
     if (this.timer) clearInterval(this.timer);
     this.status = "complete";
+    this.enrichLinks();
     this.enrichPageLinkCounts();
     this.applyDuplicateIssues();
     for (const page of this.pages) emit("page", page);
+    for (const link of this.store.links) emit("link", link);
     emit("status", this.status);
     this.emitStats();
     emit("complete", this.getSummary());
@@ -402,6 +407,26 @@ class Crawler {
     }));
 
     for (const page of this.pages) this.store.pages.set(page.url, page);
+  }
+
+  enrichLinks() {
+    for (const link of this.store.links) {
+      if (!link.isInternal || !link.destinationUrl) continue;
+
+      const destinationPage = this.store.pages.get(link.destinationUrl);
+      if (!destinationPage) {
+        addIssue(link.issues, "Destination not crawled");
+        continue;
+      }
+
+      link.destinationStatus = destinationPage.status;
+      link.finalDestinationUrl = destinationPage.finalUrl;
+      link.destinationIndexable = destinationPage.indexability?.isIndexable ?? null;
+
+      if (!destinationPage.status || destinationPage.status >= 400) addIssue(link.issues, "Broken internal link");
+      if (destinationPage.status && destinationPage.status >= 300 && destinationPage.status < 400) addIssue(link.issues, "Redirecting internal link");
+      if (destinationPage.indexability && !destinationPage.indexability.isIndexable) addIssue(link.issues, "Links to non-indexable URL");
+    }
   }
 
   getSummary() {
@@ -517,6 +542,22 @@ function validateOpenGraphIssues(issues, openGraph) {
       addIssue(issues, `Duplicate ${property}`);
     }
   }
+}
+
+function buildLinkIssues({ href, normalized, anchorText, rel, isInternal }) {
+  const issues = [];
+  if (!href) addIssue(issues, "Missing href");
+  if (href && !normalized) addIssue(issues, "Invalid href");
+  if (href && ["#", "/", ""].includes(href.trim())) addIssue(issues, "Low-value href");
+  if (!anchorText) addIssue(issues, "Empty anchor text");
+  if (isGenericAnchor(anchorText)) addIssue(issues, "Generic anchor text");
+  if (/\bnofollow\b/i.test(rel) && isInternal) addIssue(issues, "Nofollow internal link");
+  return issues;
+}
+
+function isGenericAnchor(anchorText) {
+  const normalized = anchorText.toLowerCase().trim();
+  return ["click here", "read more", "learn more", "more", "here", "link"].includes(normalized);
 }
 
 function normalizeOptionalUrl(value, baseUrl) {

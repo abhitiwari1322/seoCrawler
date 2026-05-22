@@ -73,6 +73,9 @@ export interface CrawlLink {
   rawHref: string;
   destinationUrl: string;
   normalizedDestinationUrl: string;
+  finalDestinationUrl: string;
+  destinationStatus: number | null;
+  destinationIndexable: boolean | null;
   anchorText: string;
   rel: string;
   isFollowed: boolean;
