@@ -21,6 +21,7 @@ class Crawler {
     this.origin = "";
     this.queue = [];
     this.seen = new Set();
+    this.allowedSpecificUrls = new Set();
     this.pages = [];
     this.store = createEmptyStore();
     this.active = 0;
@@ -37,19 +38,45 @@ class Crawler {
   async start(settings) {
     this.reset();
     this.settings = settings;
-    this.root = new URL(settings.rootUrl);
+    const seedUrls = this.prepareSeedUrls(settings);
+    if (seedUrls.length === 0) {
+      emit("error", "No valid URLs found to crawl.");
+      return;
+    }
+
+    this.root = new URL(seedUrls[0]);
     this.origin = this.root.origin;
     this.status = "running";
     this.startedAt = Date.now();
-    this.enqueue(this.root.href, 0);
+    for (const seedUrl of seedUrls) this.enqueue(seedUrl, 0);
     emit("status", this.status);
-    emit("log", `Started crawl for ${this.root.href}`);
+    emit("log", settings.crawlMode === "url-list" ? `Started URL-list crawl for ${seedUrls.length} URL(s).` : `Started crawl for ${this.root.href}`);
 
     if (settings.respectRobots) await this.loadRobots();
     await this.loadSitemaps();
 
     this.timer = setInterval(() => this.emitStats(), 500);
     this.pump();
+  }
+
+  prepareSeedUrls(settings) {
+    if (settings.crawlMode !== "url-list") return [new URL(settings.rootUrl).href];
+
+    const urls = [];
+    for (const rawUrl of settings.specificUrls ?? []) {
+      try {
+        const url = new URL(rawUrl);
+        if (url.protocol !== "http:" && url.protocol !== "https:") continue;
+        url.hash = "";
+        if (url.pathname !== "/" && url.pathname.endsWith("/")) url.pathname = url.pathname.slice(0, -1);
+        urls.push(url.href);
+        this.allowedSpecificUrls.add(url.href);
+      } catch {
+        // Ignore malformed file rows. The UI already reports when no URLs parse.
+      }
+    }
+
+    return [...new Set(urls)].slice(0, Math.max(1, settings.maxUrls || urls.length));
   }
 
   pause() {
@@ -141,6 +168,7 @@ class Crawler {
     const normalized = this.normalize(rawUrl, baseUrl);
     if (!normalized || this.seen.has(normalized)) return;
     if (!normalized.startsWith(this.origin)) return;
+    if (this.settings.crawlMode === "url-list" && !this.allowedSpecificUrls.has(normalized)) return;
     if (depth > this.settings.maxDepth) return;
     if (this.robots && !this.robots.isAllowed(normalized, this.settings.userAgent)) {
       emit("log", `Blocked by robots.txt: ${normalized}`);
@@ -337,7 +365,7 @@ class Crawler {
 
       this.store.links.push(link);
       emit("link", link);
-      if (isInternal) this.enqueue(href, item.depth + 1, item.url, item.url);
+      if (isInternal && this.settings.crawlMode !== "url-list") this.enqueue(href, item.depth + 1, item.url, item.url);
     });
   }
 

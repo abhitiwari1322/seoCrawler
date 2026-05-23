@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, Download, Pause, Play, Search, Square, Trash2 } from "lucide-react";
+import { Activity, Download, Pause, Play, Search, Square, Trash2, Upload } from "lucide-react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { EngineClient } from "./engineClient";
 import type { CrawlImage, CrawlLink, CrawlPage, CrawlPsiRecord, CrawlSettings, CrawlSitemapRecord, CrawlStats, CrawlStatus } from "./types";
 
 const defaultSettings: CrawlSettings = {
   rootUrl: "https://example.com",
+  crawlMode: "site",
+  specificUrls: [],
   maxUrls: 500,
   maxDepth: 5,
   concurrency: 6,
@@ -45,6 +47,27 @@ function createEmptyReportFilters(): ReportFilterState {
   return Object.fromEntries(reportTabs.map((tab) => [tab, {}])) as ReportFilterState;
 }
 
+function parseUrlList(text: string) {
+  const urls = new Set<string>();
+  const candidates = text
+    .split(/[\n\r,\t ;]+/)
+    .map((value) => value.trim().replace(/^["']|["']$/g, ""))
+    .filter(Boolean);
+
+  for (const candidate of candidates) {
+    try {
+      const url = new URL(candidate);
+      if (url.protocol !== "http:" && url.protocol !== "https:") continue;
+      url.hash = "";
+      urls.add(url.href);
+    } catch {
+      // Ignore CSV headers, notes, and malformed cells.
+    }
+  }
+
+  return Array.from(urls);
+}
+
 export function App() {
   const engineRef = useRef(new EngineClient());
   const subscribedRef = useRef(false);
@@ -59,6 +82,8 @@ export function App() {
   const [query, setQuery] = useState("");
   const [activeReport, setActiveReport] = useState<ReportTab>("Overview");
   const [reportFiltersByTab, setReportFiltersByTab] = useState<ReportFilterState>(() => createEmptyReportFilters());
+  const [urlListFileName, setUrlListFileName] = useState("");
+  const [urlListError, setUrlListError] = useState("");
   const [logs, setLogs] = useState<string[]>(["Ready to crawl."]);
   const [crawlElapsedMs, setCrawlElapsedMs] = useState(0);
   const crawlStartedAtRef = useRef<number | null>(null);
@@ -247,6 +272,12 @@ export function App() {
   }
 
   async function startCrawl() {
+    if (settings.crawlMode === "url-list" && settings.specificUrls.length === 0) {
+      setStatus("error");
+      setLogs((current) => ["Upload a URL list before starting a URL-list crawl.", ...current].slice(0, 8));
+      return;
+    }
+
     setPages([]);
     setLinks([]);
     setImages([]);
@@ -257,7 +288,10 @@ export function App() {
     resetTimer();
     try {
       const engine = await ensureEngine();
-      engine.start(settings);
+      engine.start({
+        ...settings,
+        maxUrls: settings.crawlMode === "url-list" ? Math.max(settings.specificUrls.length, 1) : settings.maxUrls
+      });
     } catch (error) {
       setStatus("error");
       const message = error instanceof Error ? error.message : String(error);
@@ -289,6 +323,47 @@ export function App() {
     }));
   }
 
+  async function handleUrlListUpload(file: File | undefined) {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const urls = parseUrlList(text);
+      if (urls.length === 0) {
+        setUrlListError("No valid URLs found.");
+        setUrlListFileName(file.name);
+        setSettings((current) => ({ ...current, crawlMode: "url-list", specificUrls: [] }));
+        return;
+      }
+
+      setUrlListError("");
+      setUrlListFileName(file.name);
+      setSettings((current) => ({
+        ...current,
+        rootUrl: urls[0],
+        crawlMode: "url-list",
+        specificUrls: urls,
+        maxUrls: urls.length
+      }));
+      setLogs((current) => [`Loaded ${urls.length} URL(s) from ${file.name}.`, ...current].slice(0, 8));
+    } catch (error) {
+      setUrlListError(error instanceof Error ? error.message : "Could not read URL file.");
+    }
+  }
+
+  function clearUrlList() {
+    setUrlListFileName("");
+    setUrlListError("");
+    setSettings((current) => ({ ...current, specificUrls: [], maxUrls: defaultSettings.maxUrls }));
+  }
+
+  function updateCrawlMode(crawlMode: CrawlSettings["crawlMode"]) {
+    setSettings((current) => ({
+      ...current,
+      crawlMode,
+      maxUrls: crawlMode === "url-list" ? current.specificUrls.length : defaultSettings.maxUrls
+    }));
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -301,20 +376,50 @@ export function App() {
         </div>
 
         <label>
-          Root URL
-          <input value={settings.rootUrl} onChange={(event) => setSettings({ ...settings, rootUrl: event.target.value })} />
+          Crawl mode
+          <select value={settings.crawlMode} onChange={(event) => updateCrawlMode(event.target.value as CrawlSettings["crawlMode"])}>
+            <option value="site">Discover site URLs</option>
+            <option value="url-list">Only uploaded URLs</option>
+          </select>
         </label>
 
-        <div className="two-col">
+        {settings.crawlMode === "site" ? (
           <label>
-            URLs
-            <input type="number" min="1" value={settings.maxUrls} onChange={(event) => setSettings({ ...settings, maxUrls: Number(event.target.value) })} />
+            Root URL
+            <input value={settings.rootUrl} onChange={(event) => setSettings({ ...settings, rootUrl: event.target.value })} />
           </label>
+        ) : (
+          <div className="url-list-panel">
+            <label className="file-upload">
+              <span><Upload size={15} /> URL file</span>
+              <input type="file" accept=".txt,.csv,text/plain,text/csv" onChange={(event) => void handleUrlListUpload(event.target.files?.[0])} />
+              <span className="upload-control">
+                <strong>{urlListFileName || "Choose URL file"}</strong>
+                <small>{settings.specificUrls.length ? `${settings.specificUrls.length} URL(s) loaded` : "TXT or CSV with absolute URLs"}</small>
+              </span>
+            </label>
+            {urlListError ? <strong className="url-list-error">{urlListError}</strong> : null}
+            {settings.specificUrls.length > 0 ? <button type="button" className="text-button" onClick={clearUrlList}>Clear uploaded list</button> : null}
+          </div>
+        )}
+
+        {settings.crawlMode === "site" ? (
+          <div className="two-col">
+            <label>
+              URLs
+              <input type="number" min="1" value={settings.maxUrls} onChange={(event) => setSettings({ ...settings, maxUrls: Number(event.target.value) })} />
+            </label>
+            <label>
+              Depth
+              <input type="number" min="0" value={settings.maxDepth} onChange={(event) => setSettings({ ...settings, maxDepth: Number(event.target.value) })} />
+            </label>
+          </div>
+        ) : (
           <label>
-            Depth
-            <input type="number" min="0" value={settings.maxDepth} onChange={(event) => setSettings({ ...settings, maxDepth: Number(event.target.value) })} />
+            URLs from file
+            <input type="number" value={settings.specificUrls.length} disabled readOnly />
           </label>
-        </div>
+        )}
 
         <div className="two-col">
           <label>

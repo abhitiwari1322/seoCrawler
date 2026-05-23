@@ -69,10 +69,84 @@ select {
   color: #172027;
 }
 
-.sidebar input {
+.sidebar input,
+.sidebar select {
   border-color: #334653;
   background: #22303a;
   color: #fff;
+}
+
+.file-upload {
+  gap: 9px;
+}
+
+.file-upload > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.file-upload input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.url-list-panel {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #334653;
+  border-radius: 6px;
+  padding: 10px;
+  background: #101820;
+  color: #cbd5dd;
+  font-size: 12px;
+}
+
+.upload-control {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #426052;
+  border-radius: 6px;
+  padding: 10px;
+  background: #22303a;
+  cursor: pointer;
+}
+
+.upload-control:hover {
+  border-color: #5e8a75;
+}
+
+.upload-control strong,
+.upload-control small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-control strong {
+  color: #fff;
+}
+
+.upload-control small {
+  color: #9eacb8;
+  font-weight: 600;
+}
+
+.text-button {
+  min-height: 30px;
+  justify-self: start;
+  border: 1px solid #426052;
+  padding: 0 10px;
+  color: #dce6ec;
+  background: transparent;
+  font-size: 12px;
+}
+
+.url-list-error {
+  color: #ffb4a8;
 }
 
 .two-col,

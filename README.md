@@ -33,6 +33,8 @@ Sitemap support has started. The crawler discovers sitemap URLs from `robots.txt
 
 PageSpeed Insights support has started. PageSpeed checks are optional and run after crawl completion for a limited number of indexable 2xx URLs. The UI supports an optional API key, max URL limit, and mobile/desktop strategy toggles. The report captures performance score, FCP, Speed Index, LCP, TBT, CLS, INP, and visible API error details when Google rejects a request.
 
+URL-list crawling is now available. Users can switch the crawl mode to only uploaded URLs, upload a `.txt` or `.csv` file containing absolute URLs, and the crawler will fetch only those listed pages while still extracting metadata, links, images, indexability, and report data from them.
+
 ## Technology Stack
 
 | Layer | Technology | Current Usage |
@@ -228,6 +230,8 @@ src-tauri/target/release/bundle/dmg/Scout SEO Crawler_0.1.0_aarch64.dmg
    - Delay
    - User agent
    - robots.txt setting
+   - Crawl mode
+   - Optional uploaded URL list
 2. User clicks Start.
 3. React calls `EngineClient.start(settings)`.
 4. `EngineClient` starts the Tauri sidecar if needed.
@@ -237,10 +241,11 @@ src-tauri/target/release/bundle/dmg/Scout SEO Crawler_0.1.0_aarch64.dmg
    - Origin boundary
    - Queue
    - Seen URL set
+   - URL-list allowlist when uploaded URL mode is enabled
    - Duplicate maps
    - robots.txt parser when enabled
 7. Sidecar crawls pages concurrently.
-8. For each HTML page, sidecar extracts metadata and discovers links.
+8. For each HTML page, sidecar extracts metadata and discovers links. In URL-list mode, discovered links are recorded but not enqueued.
 9. Sidecar emits page, stats, status, log, and completion events.
 10. React updates metrics, logs, chart, and results table in real time.
 11. User can pause, resume, stop, search, filter, or export CSV.
@@ -250,6 +255,7 @@ src-tauri/target/release/bundle/dmg/Scout SEO Crawler_0.1.0_aarch64.dmg
 ### Crawl Engine
 
 - Start crawl from a root URL.
+- Crawl only URLs supplied from an uploaded `.txt` or `.csv` file.
 - Discover internal links from `<a href>`.
 - Resolve relative URLs.
 - Normalize URLs:

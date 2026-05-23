@@ -2,6 +2,8 @@ export type CrawlStatus = "idle" | "running" | "paused" | "stopped" | "complete"
 
 export interface CrawlSettings {
   rootUrl: string;
+  crawlMode: "site" | "url-list";
+  specificUrls: string[];
   maxUrls: number;
   maxDepth: number;
   concurrency: number;
