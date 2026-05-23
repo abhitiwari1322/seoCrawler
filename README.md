@@ -23,13 +23,15 @@ Phase 1 data-model foundation is now in place. The Node sidecar keeps structured
 
 Phase 2 metadata and indexability validation has started. The crawler now adds issue flags for canonical problems, duplicate metadata across all affected pages, non-sequential heading hierarchy, missing/duplicate Open Graph tags, and robots/canonical indexability reasons.
 
-The UI now includes report tabs for Overview, Metadata, Indexability, Headings, Open Graph, Structured Data, Links, Images, Sitemaps, and PageSpeed. Sitemap and PageSpeed tabs are placeholders until their implementation phases; the other tabs are populated from current crawl data.
+The UI now includes report tabs for Overview, Metadata, Indexability, Headings, Open Graph, Structured Data, Links, Images, Sitemaps, and PageSpeed. Sitemaps and PageSpeed now populate from crawl/runtime data; advanced breakdowns and exports are still planned.
 
 Phase 3 link and referrer analysis has started. Internal links are enriched after crawl completion with destination status, final URL, destination indexability, broken-link flags, non-indexable destination flags, anchor-text issues, and nofollow-internal-link flags.
 
 Image SEO checks have started. Image extraction now considers `src`, common lazy-load source attributes, and `srcset`; records width, height, lazy-loading state, and flags missing/empty/generic/keyword-stuffed alt text plus missing dimensions.
 
 Sitemap support has started. The crawler discovers sitemap URLs from `robots.txt` and `/sitemap.xml`, parses sitemap indexes and URL sets, and enriches sitemap rows after crawl completion with coverage, status, indexability, and sitemap-specific issues.
+
+PageSpeed Insights support has started. PageSpeed checks are optional and run after crawl completion for a limited number of indexable 2xx URLs. The UI supports an optional API key, max URL limit, and mobile/desktop strategy toggles. The report captures performance score, FCP, Speed Index, LCP, TBT, CLS, INP, and visible API error details when Google rejects a request.
 
 ## Technology Stack
 
@@ -447,8 +449,8 @@ Scoped command binaries/crawler-engine not found
 - SQLite session storage is not implemented yet.
 - XLSX export is not implemented yet.
 - XML sitemap support is partially implemented; sitemap discovery, parsing, and coverage comparison are available, while sitemap import controls and advanced sitemap exports are still pending.
-- Image SEO extraction is not implemented yet.
 - Image SEO extraction is partially implemented; file size, natural dimensions, and broken image HTTP validation are still pending.
+- PageSpeed Insights reports are partially implemented; optional mobile/desktop performance scores, FCP, Speed Index, LCP, TBT, CLS, INP, and API error details are available, while advanced audit breakdowns are still pending.
 - External link checking is not implemented yet.
 - Internal link source/destination reports are partially implemented; external link validation and advanced link grouping are still pending.
 - Redirect-chain and redirect-loop detection are not implemented yet.

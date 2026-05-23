@@ -173,7 +173,7 @@ class Crawler {
           setTimeout(() => this.pump(), this.settings.delayMs);
         }
         if (this.queue.length === 0 && this.active === 0 && this.status === "running") {
-          this.finish();
+          void this.finish();
         }
       });
     }
@@ -385,13 +385,14 @@ class Crawler {
     }
   }
 
-  finish() {
+  async finish() {
     if (this.timer) clearInterval(this.timer);
-    this.status = "complete";
     this.enrichLinks();
     this.enrichPageLinkCounts();
     this.enrichSitemaps();
     this.applyDuplicateIssues();
+    await this.runPageSpeed();
+    this.status = "complete";
     for (const page of this.pages) emit("page", page);
     for (const link of this.store.links) emit("link", link);
     for (const sitemap of this.store.sitemaps) emit("sitemap", sitemap);
@@ -500,6 +501,38 @@ class Crawler {
     applyDuplicateIssueToPages(this.pages, this.titleOccurrences, "Duplicate title");
     applyDuplicateIssueToPages(this.pages, this.descriptionOccurrences, "Duplicate meta description");
     applyDuplicateIssueToPages(this.pages, this.h1Occurrences, "Duplicate H1");
+  }
+
+  async runPageSpeed() {
+    if (!this.settings.psiEnabled) return;
+
+    const strategies = [];
+    if (this.settings.psiMobile) strategies.push("mobile");
+    if (this.settings.psiDesktop) strategies.push("desktop");
+    if (strategies.length === 0) {
+      emit("log", "PageSpeed skipped: no strategy selected.");
+      return;
+    }
+
+    const urls = this.pages
+      .filter((page) => page.status && page.status >= 200 && page.status < 300 && page.indexability?.isIndexable)
+      .slice(0, Math.max(1, this.settings.psiMaxUrls || 1))
+      .map((page) => page.url);
+
+    if (urls.length === 0) {
+      emit("log", "PageSpeed skipped: no indexable 2xx URLs found.");
+      return;
+    }
+
+    emit("log", `Running PageSpeed for ${urls.length} URL(s).`);
+
+    for (const url of urls) {
+      for (const strategy of strategies) {
+        const record = await runPageSpeedRequest({ url, strategy, apiKey: clean(this.settings.psiApiKey) });
+        this.store.psiResults.set(`${url}-${strategy}`, record);
+        emit("psi", record);
+      }
+    }
   }
 
   enrichSitemaps() {
@@ -674,6 +707,66 @@ function isKeywordStuffedAlt(alt) {
   const counts = new Map();
   for (const word of words) counts.set(word, (counts.get(word) ?? 0) + 1);
   return Math.max(...counts.values()) >= 4;
+}
+
+async function runPageSpeedRequest({ url, strategy, apiKey }) {
+  const endpoint = new URL("https://www.googleapis.com/pagespeedonline/v5/runPagespeed");
+  endpoint.searchParams.set("url", url);
+  endpoint.searchParams.set("strategy", strategy);
+  endpoint.searchParams.set("category", "performance");
+  if (apiKey) endpoint.searchParams.set("key", apiKey);
+
+  try {
+    const response = await fetch(endpoint, { headers: { "user-agent": "ScoutSEO/0.1" } });
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return emptyPsiRecord(url, strategy, [formatPageSpeedError(response.status, data)]);
+    }
+
+    const audits = data.lighthouseResult?.audits ?? {};
+    const categories = data.lighthouseResult?.categories ?? {};
+    const score = categories.performance?.score;
+    return {
+      url,
+      strategy,
+      performanceScore: typeof score === "number" ? Math.round(score * 100) : null,
+      fcp: audits["first-contentful-paint"]?.displayValue ?? "",
+      speedIndex: audits["speed-index"]?.displayValue ?? "",
+      lcp: audits["largest-contentful-paint"]?.displayValue ?? "",
+      tbt: audits["total-blocking-time"]?.displayValue ?? "",
+      cls: audits["cumulative-layout-shift"]?.displayValue ?? "",
+      inp: audits["interaction-to-next-paint"]?.displayValue ?? audits["experimental-interaction-to-next-paint"]?.displayValue ?? "",
+      issues: []
+    };
+  } catch (error) {
+    return emptyPsiRecord(url, strategy, [error?.message ?? "PageSpeed request failed"]);
+  }
+}
+
+function emptyPsiRecord(url, strategy, issues) {
+  return {
+    url,
+    strategy,
+    performanceScore: null,
+    fcp: "",
+    speedIndex: "",
+    lcp: "",
+    tbt: "",
+    cls: "",
+    inp: "",
+    issues
+  };
+}
+
+function formatPageSpeedError(status, data) {
+  const apiError = data?.error;
+  const reason = apiError?.status || apiError?.errors?.[0]?.reason;
+  const message = clean(apiError?.message ?? "");
+  const prefix = `PageSpeed API error ${status}`;
+  if (reason && message) return `${prefix}: ${reason} - ${message}`;
+  if (message) return `${prefix}: ${message}`;
+  return prefix;
 }
 
 function isGenericAnchor(anchorText) {

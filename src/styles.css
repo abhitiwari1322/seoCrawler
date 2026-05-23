@@ -97,6 +97,12 @@ select {
   height: 18px;
 }
 
+.stacked-checks {
+  display: grid;
+  gap: 8px;
+  align-content: end;
+}
+
 button {
   display: inline-flex;
   min-height: 42px;
@@ -259,26 +265,22 @@ button:disabled {
   color: #8a97a3;
 }
 
-.filters {
-  margin-bottom: 12px;
-}
-
 .report-tabs {
   display: flex;
-  gap: 8px;
-  margin-bottom: 12px;
+  gap: 6px;
+  margin-bottom: 10px;
   overflow-x: auto;
   padding-bottom: 2px;
 }
 
 .report-tabs button {
-  min-height: 38px;
+  min-height: 34px;
   flex: 0 0 auto;
   border: 1px solid #d7e0e7;
-  padding: 0 13px;
+  padding: 0 10px;
   color: #42505c;
   background: #fff;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -288,9 +290,21 @@ button:disabled {
   background: #23745a;
 }
 
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  border: 1px solid #dde4ea;
+  border-radius: 8px;
+  padding: 8px;
+  background: #fff;
+}
+
 .searchbox {
   display: flex;
-  width: min(520px, 100%);
+  flex: 0 1 280px;
+  min-width: 220px;
   align-items: center;
   gap: 8px;
   border: 1px solid #ced7df;
@@ -304,8 +318,48 @@ button:disabled {
   padding-left: 0;
 }
 
-.filters select {
-  width: 170px;
+.filter-controls {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  min-width: 0;
+  overflow: visible;
+  padding-bottom: 1px;
+}
+
+.filter-select {
+  position: relative;
+  flex: 0 0 124px;
+  min-width: 0;
+  max-width: 124px;
+  color: #61707e;
+}
+
+.filter-select span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.filter-select select {
+  min-height: 36px;
+  padding: 7px;
+  font-size: 11px;
+}
+
+.secondary-button {
+  min-height: 36px;
+  flex: 0 0 auto;
+  border: 1px solid #d7e0e7;
+  padding: 0 12px;
+  color: #42505c;
+  background: #fff;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .table-wrap {
@@ -359,5 +413,14 @@ th {
   .filters {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .filter-controls {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .filter-select {
+    flex: 0 0 150px;
   }
 }

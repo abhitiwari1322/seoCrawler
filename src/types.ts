@@ -9,6 +9,11 @@ export interface CrawlSettings {
   userAgent: string;
   respectRobots: boolean;
   minWordCount: number;
+  psiEnabled: boolean;
+  psiApiKey: string;
+  psiMaxUrls: number;
+  psiMobile: boolean;
+  psiDesktop: boolean;
 }
 
 export interface CrawlStats {
@@ -109,6 +114,19 @@ export interface CrawlSitemapRecord {
   issues: string[];
 }
 
+export interface CrawlPsiRecord {
+  url: string;
+  strategy: "mobile" | "desktop";
+  performanceScore: number | null;
+  fcp: string;
+  speedIndex: string;
+  lcp: string;
+  tbt: string;
+  cls: string;
+  inp: string;
+  issues: string[];
+}
+
 export interface CrawlPage {
   url: string;
   finalUrl: string;
@@ -133,6 +151,6 @@ export interface CrawlPage {
 }
 
 export interface CrawlEvent {
-  type: "ready" | "status" | "stats" | "page" | "link" | "image" | "sitemap" | "log" | "complete" | "error" | "exported";
+  type: "ready" | "status" | "stats" | "page" | "link" | "image" | "sitemap" | "psi" | "log" | "complete" | "error" | "exported";
   payload?: unknown;
 }

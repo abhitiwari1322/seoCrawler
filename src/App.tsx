@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, Download, Pause, Play, Search, Square, Trash2 } from "lucide-react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { EngineClient } from "./engineClient";
-import type { CrawlImage, CrawlLink, CrawlPage, CrawlSettings, CrawlSitemapRecord, CrawlStats, CrawlStatus } from "./types";
+import type { CrawlImage, CrawlLink, CrawlPage, CrawlPsiRecord, CrawlSettings, CrawlSitemapRecord, CrawlStats, CrawlStatus } from "./types";
 
 const defaultSettings: CrawlSettings = {
   rootUrl: "https://example.com",
@@ -12,7 +12,12 @@ const defaultSettings: CrawlSettings = {
   delayMs: 100,
   userAgent: "ScoutSEO/0.1 (+https://example.com/bot)",
   respectRobots: true,
-  minWordCount: 300
+  minWordCount: 300,
+  psiEnabled: false,
+  psiApiKey: "",
+  psiMaxUrls: 5,
+  psiMobile: true,
+  psiDesktop: true
 };
 
 const emptyStats: CrawlStats = {
@@ -28,6 +33,17 @@ const emptyStats: CrawlStats = {
 const statusColors = ["#137c5a", "#2d6cdf", "#c67b19", "#b13b3b", "#5b6270"];
 const reportTabs = ["Overview", "Metadata", "Indexability", "Headings", "Open Graph", "Structured Data", "Links", "Images", "Sitemaps", "PageSpeed"] as const;
 type ReportTab = (typeof reportTabs)[number];
+type ReportFilters = Record<string, string>;
+type ReportFilterConfig = {
+  key: string;
+  label: string;
+  options: { label: string; value: string }[];
+};
+type ReportFilterState = Record<ReportTab, ReportFilters>;
+
+function createEmptyReportFilters(): ReportFilterState {
+  return Object.fromEntries(reportTabs.map((tab) => [tab, {}])) as ReportFilterState;
+}
 
 export function App() {
   const engineRef = useRef(new EngineClient());
@@ -39,13 +55,15 @@ export function App() {
   const [links, setLinks] = useState<CrawlLink[]>([]);
   const [images, setImages] = useState<CrawlImage[]>([]);
   const [sitemaps, setSitemaps] = useState<CrawlSitemapRecord[]>([]);
+  const [psiResults, setPsiResults] = useState<CrawlPsiRecord[]>([]);
   const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
   const [activeReport, setActiveReport] = useState<ReportTab>("Overview");
+  const [reportFiltersByTab, setReportFiltersByTab] = useState<ReportFilterState>(() => createEmptyReportFilters());
   const [logs, setLogs] = useState<string[]>(["Ready to crawl."]);
   const [crawlElapsedMs, setCrawlElapsedMs] = useState(0);
   const crawlStartedAtRef = useRef<number | null>(null);
   const accumulatedElapsedRef = useRef(0);
+  const reportFilters = reportFiltersByTab[activeReport] ?? {};
 
   const statusData = useMemo(() => {
     const groups = new Map<string, number>();
@@ -57,12 +75,17 @@ export function App() {
   }, [pages]);
 
   const filteredPages = useMemo(() => {
+    const normalizedQuery = query.toLowerCase();
     return pages.filter((page) => {
-      const matchesQuery = !query || page.url.toLowerCase().includes(query.toLowerCase()) || page.title.toLowerCase().includes(query.toLowerCase());
-      const matchesStatus = statusFilter === "all" || String(page.status ?? "failed").startsWith(statusFilter);
-      return matchesQuery && matchesStatus;
+      const matchesQuery =
+        !normalizedQuery ||
+        page.url.toLowerCase().includes(normalizedQuery) ||
+        page.title.toLowerCase().includes(normalizedQuery) ||
+        page.description.toLowerCase().includes(normalizedQuery) ||
+        page.issues.join(" ").toLowerCase().includes(normalizedQuery);
+      return matchesQuery && matchesPageReportFilters(page, activeReport, reportFilters);
     });
-  }, [pages, query, statusFilter]);
+  }, [activeReport, pages, query, reportFilters]);
 
   const filteredLinks = useMemo(() => {
     const normalizedQuery = query.toLowerCase();
@@ -71,10 +94,11 @@ export function App() {
         !normalizedQuery ||
         link.sourceUrl.toLowerCase().includes(normalizedQuery) ||
         link.destinationUrl.toLowerCase().includes(normalizedQuery) ||
-        link.anchorText.toLowerCase().includes(normalizedQuery);
-      return matchesQuery;
+        link.anchorText.toLowerCase().includes(normalizedQuery) ||
+        link.issues.join(" ").toLowerCase().includes(normalizedQuery);
+      return matchesQuery && matchesLinkFilters(link, reportFilters);
     });
-  }, [links, query]);
+  }, [links, query, reportFilters]);
 
   const filteredImages = useMemo(() => {
     const normalizedQuery = query.toLowerCase();
@@ -83,10 +107,11 @@ export function App() {
         !normalizedQuery ||
         image.pageUrl.toLowerCase().includes(normalizedQuery) ||
         image.src.toLowerCase().includes(normalizedQuery) ||
-        image.alt.toLowerCase().includes(normalizedQuery);
-      return matchesQuery;
+        image.alt.toLowerCase().includes(normalizedQuery) ||
+        image.issues.join(" ").toLowerCase().includes(normalizedQuery);
+      return matchesQuery && matchesImageFilters(image, reportFilters);
     });
-  }, [images, query]);
+  }, [images, query, reportFilters]);
 
   const filteredSitemaps = useMemo(() => {
     const normalizedQuery = query.toLowerCase();
@@ -96,9 +121,21 @@ export function App() {
         record.sitemapUrl.toLowerCase().includes(normalizedQuery) ||
         record.url.toLowerCase().includes(normalizedQuery) ||
         record.issues.join(" ").toLowerCase().includes(normalizedQuery);
-      return matchesQuery;
+      return matchesQuery && matchesSitemapFilters(record, reportFilters);
     });
-  }, [sitemaps, query]);
+  }, [sitemaps, query, reportFilters]);
+
+  const filteredPsiResults = useMemo(() => {
+    const normalizedQuery = query.toLowerCase();
+    return psiResults.filter((record) => {
+      const matchesQuery =
+        !normalizedQuery ||
+        record.url.toLowerCase().includes(normalizedQuery) ||
+        record.strategy.includes(normalizedQuery) ||
+        record.issues.join(" ").toLowerCase().includes(normalizedQuery);
+      return matchesQuery && matchesPsiFilters(record, reportFilters);
+    });
+  }, [psiResults, query, reportFilters]);
 
   useEffect(() => {
     if (status !== "running") return;
@@ -185,6 +222,17 @@ export function App() {
             return next;
           });
         }
+        if (event.type === "psi") {
+          const psi = event.payload as CrawlPsiRecord;
+          setPsiResults((current) => {
+            const existingIndex = current.findIndex((currentPsi) => currentPsi.url === psi.url && currentPsi.strategy === psi.strategy);
+            if (existingIndex === -1) return [psi, ...current].slice(0, 1000);
+
+            const next = [...current];
+            next[existingIndex] = psi;
+            return next;
+          });
+        }
         if (event.type === "log") setLogs((current) => [String(event.payload), ...current].slice(0, 8));
         if (event.type === "complete") setStatus("complete");
         if (event.type === "error") {
@@ -203,6 +251,7 @@ export function App() {
     setLinks([]);
     setImages([]);
     setSitemaps([]);
+    setPsiResults([]);
     setStats(emptyStats);
     setLogs([]);
     resetTimer();
@@ -218,7 +267,27 @@ export function App() {
 
   const issueCount = pages.reduce((sum, page) => sum + page.issues.length, 0);
   const canClearLogs = logs.length > 0 && status !== "running";
-  const reportRows = getReportRows(activeReport, filteredPages, filteredLinks, filteredImages, filteredSitemaps);
+  const activeFilterConfigs = getReportFilterConfigs(activeReport);
+  const activeFilterKeys = activeFilterConfigs.map((filter) => filter.key);
+  const hasActiveFilters = activeFilterKeys.some((key) => (reportFilters[key] ?? "all") !== "all");
+  const reportRows = getReportRows(activeReport, filteredPages, filteredLinks, filteredImages, filteredSitemaps, filteredPsiResults);
+
+  function updateActiveFilter(key: string, value: string) {
+    setReportFiltersByTab((current) => ({
+      ...current,
+      [activeReport]: {
+        ...current[activeReport],
+        [key]: value
+      }
+    }));
+  }
+
+  function clearActiveFilters() {
+    setReportFiltersByTab((current) => ({
+      ...current,
+      [activeReport]: clearReportFilters(current[activeReport] ?? {}, activeFilterKeys)
+    }));
+  }
 
   return (
     <main className="app-shell">
@@ -267,6 +336,37 @@ export function App() {
           <input type="checkbox" checked={settings.respectRobots} onChange={(event) => setSettings({ ...settings, respectRobots: event.target.checked })} />
           Respect robots.txt
         </label>
+
+        <label className="check-row">
+          <input type="checkbox" checked={settings.psiEnabled} onChange={(event) => setSettings({ ...settings, psiEnabled: event.target.checked })} />
+          PageSpeed checks
+        </label>
+
+        {settings.psiEnabled ? (
+          <>
+            <label>
+              PSI API key
+              <input value={settings.psiApiKey} onChange={(event) => setSettings({ ...settings, psiApiKey: event.target.value })} placeholder="Optional" />
+            </label>
+
+            <div className="two-col">
+              <label>
+                PSI URLs
+                <input type="number" min="1" max="25" value={settings.psiMaxUrls} onChange={(event) => setSettings({ ...settings, psiMaxUrls: Number(event.target.value) })} />
+              </label>
+              <div className="stacked-checks">
+                <label className="check-row">
+                  <input type="checkbox" checked={settings.psiMobile} onChange={(event) => setSettings({ ...settings, psiMobile: event.target.checked })} />
+                  Mobile
+                </label>
+                <label className="check-row">
+                  <input type="checkbox" checked={settings.psiDesktop} onChange={(event) => setSettings({ ...settings, psiDesktop: event.target.checked })} />
+                  Desktop
+                </label>
+              </div>
+            </div>
+          </>
+        ) : null}
 
         <div className="action-row">
           <button onClick={startCrawl} disabled={status === "running"}>
@@ -327,20 +427,6 @@ export function App() {
           </div>
         </section>
 
-        <section className="filters">
-          <div className="searchbox">
-            <Search size={16} />
-            <input placeholder="Search current report" value={query} onChange={(event) => setQuery(event.target.value)} />
-          </div>
-          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} disabled={activeReport === "Links" || activeReport === "Images" || activeReport === "Sitemaps"}>
-            <option value="all">All statuses</option>
-            <option value="2">2xx</option>
-            <option value="3">3xx</option>
-            <option value="4">4xx</option>
-            <option value="5">5xx</option>
-          </select>
-        </section>
-
         <nav className="report-tabs" aria-label="Reports">
           {reportTabs.map((tab) => (
             <button key={tab} className={activeReport === tab ? "active" : ""} onClick={() => setActiveReport(tab)}>
@@ -348,6 +434,26 @@ export function App() {
             </button>
           ))}
         </nav>
+
+        <section className="filters">
+          <div className="searchbox">
+            <Search size={16} />
+            <input placeholder={`Search ${activeReport}`} value={query} onChange={(event) => setQuery(event.target.value)} />
+          </div>
+          <div className="filter-controls">
+            {activeFilterConfigs.map((filter) => (
+              <label key={`${activeReport}-${filter.key}`} className="filter-select">
+                <span>{filter.label}</span>
+                <select aria-label={filter.label} value={reportFilters[filter.key] ?? "all"} onChange={(event) => updateActiveFilter(filter.key, event.target.value)}>
+                  {filter.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
+            ))}
+            <button className="secondary-button" onClick={clearActiveFilters} disabled={!hasActiveFilters}>
+              Clear
+            </button>
+          </div>
+        </section>
 
         <div className="table-wrap">
           <table>
@@ -384,6 +490,399 @@ function formatDuration(milliseconds: number) {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
+function getReportFilterConfigs(report: ReportTab): ReportFilterConfig[] {
+  if (report === "Metadata") {
+    return [
+      optionGroup("titleStatus", "Title", ["Missing", "Duplicate", "Short", "Long", "Multiple"]),
+      optionGroup("descriptionStatus", "Description", ["Missing", "Duplicate", "Long", "Multiple"]),
+      optionGroup("canonicalStatus", "Canonical", ["Missing", "Present", "Invalid", "Canonicalized", "External"]),
+      optionGroup("issueStatus", "Issues", ["With issues", "No issues"])
+    ];
+  }
+
+  if (report === "Indexability") {
+    return [
+      optionGroup("indexability", "Indexability", ["Indexable", "Non-indexable", "Unknown"]),
+      optionGroup("indexReason", "Reason", ["Noindex", "Nofollow", "Robots blocked", "Canonicalized", "HTTP error"]),
+      optionGroup("noindex", "Noindex", ["Yes", "No"]),
+      optionGroup("nofollow", "Nofollow", ["Yes", "No"]),
+      optionGroup("canonicalized", "Canonicalized", ["Yes", "No"])
+    ];
+  }
+
+  if (report === "Headings") {
+    return [
+      optionGroup("h1Status", "H1", ["Missing", "Single", "Multiple"]),
+      optionGroup("hierarchy", "Hierarchy", ["Valid", "First heading not H1", "Non-sequential"]),
+      optionGroup("h2Status", "H2", ["Missing", "Has H2"]),
+      optionGroup("issueStatus", "Issues", ["With issues", "No issues"])
+    ];
+  }
+
+  if (report === "Open Graph") {
+    return [
+      optionGroup("ogStatus", "OG status", ["Complete", "Missing tags", "Duplicate tags"]),
+      optionGroup("ogImage", "OG image", ["Present", "Missing"]),
+      optionGroup("ogTitle", "OG title", ["Present", "Missing"]),
+      optionGroup("duplicateOg", "Duplicates", ["Any duplicate", "No duplicates"])
+    ];
+  }
+
+  if (report === "Structured Data") {
+    return [
+      optionGroup("structuredStatus", "Structured data", ["Present", "Missing"]),
+      optionGroup("validity", "Validity", ["Valid", "Invalid"]),
+      optionGroup("errorStatus", "Errors", ["Has errors", "No errors"])
+    ];
+  }
+
+  if (report === "Links") {
+    return [
+      optionGroup("linkType", "Link type", ["Internal", "External"]),
+      optionGroup("destinationStatus", "Status", ["2xx", "3xx", "4xx", "5xx", "Not crawled"]),
+      optionGroup("followStatus", "Follow", ["Follow", "Nofollow"]),
+      optionGroup("linkIssue", "Issue", ["Missing href", "Invalid href", "Empty anchor", "Generic anchor", "Broken link"])
+    ];
+  }
+
+  if (report === "Images") {
+    return [
+      optionGroup("altStatus", "Alt", ["Has alt", "Missing alt", "Empty alt", "Generic alt"]),
+      optionGroup("imageSource", "Source", ["Normal src", "Srcset", "Lazy-loaded", "Empty src"]),
+      optionGroup("dimensions", "Dimensions", ["Complete", "Missing width", "Missing height", "Missing both"]),
+      optionGroup("issueStatus", "Issues", ["With issues", "No issues"])
+    ];
+  }
+
+  if (report === "Sitemaps") {
+    return [
+      optionGroup("coverage", "Coverage", ["Crawled", "Not crawled"]),
+      optionGroup("indexability", "Indexability", ["Indexable", "Non-indexable", "Unknown"]),
+      optionGroup("statusGroup", "Status", ["2xx", "3xx", "4xx", "5xx", "Unknown"]),
+      optionGroup("sitemapIssue", "Issue", ["URL not crawled", "HTTP error", "Non-indexable"])
+    ];
+  }
+
+  if (report === "PageSpeed") {
+    return [
+      optionGroup("strategy", "Strategy", ["Mobile", "Desktop"]),
+      optionGroup("scoreRange", "Score", ["Poor", "Needs improvement", "Good", "Error"]),
+      optionGroup("apiStatus", "API", ["Successful", "Failed"]),
+      optionGroup("vitalIssue", "Vitals", ["Slow FCP", "Slow LCP", "High TBT", "High CLS", "High INP"])
+    ];
+  }
+
+  return [
+    optionGroup("statusGroup", "Status", ["2xx", "3xx", "4xx", "5xx", "Failed"]),
+    optionGroup("indexability", "Indexability", ["Indexable", "Non-indexable", "Unknown"]),
+    optionGroup("issueStatus", "Issues", ["With issues", "No issues"]),
+    optionGroup("depth", "Depth", ["0", "1", "2", "3", "4+"]),
+    optionGroup("wordCount", "Words", ["Thin", "Normal", "High"])
+  ];
+}
+
+function optionGroup(key: string, label: string, labels: string[]): ReportFilterConfig {
+  return {
+    key,
+    label,
+    options: [{ label: `All ${label.toLowerCase()}`, value: "all" }, ...labels.map((optionLabel) => ({ label: optionLabel, value: optionLabel.toLowerCase().replace(/\s+/g, "-") }))]
+  };
+}
+
+function clearReportFilters(filters: ReportFilters, activeKeys: string[]) {
+  const next = { ...filters };
+  for (const key of activeKeys) next[key] = "all";
+  return next;
+}
+
+function matchesPageReportFilters(page: CrawlPage, report: ReportTab, filters: ReportFilters) {
+  if (report === "Links" || report === "Images" || report === "Sitemaps" || report === "PageSpeed") return true;
+
+  if (!matchesStatusGroup(page.status, filters.statusGroup)) return false;
+  if (!matchesIndexability(page.indexability?.isIndexable, filters.indexability)) return false;
+  if (!matchesIssueStatus(page.issues, filters.issueStatus)) return false;
+
+  if (report === "Overview") {
+    if (!matchesDepth(page.depth, filters.depth)) return false;
+    if (!matchesWordCount(page.wordCount, filters.wordCount)) return false;
+  }
+
+  if (report === "Metadata") {
+    if (!matchesIssueOption(page, filters.titleStatus, {
+      missing: "Missing title",
+      duplicate: "Duplicate title",
+      short: "Short title",
+      long: "Long title",
+      multiple: "Multiple title tags"
+    })) return false;
+    if (!matchesIssueOption(page, filters.descriptionStatus, {
+      missing: "Missing meta description",
+      duplicate: "Duplicate meta description",
+      long: "Long meta description",
+      multiple: "Multiple meta descriptions"
+    })) return false;
+    if (!matchesCanonicalStatus(page, filters.canonicalStatus)) return false;
+  }
+
+  if (report === "Indexability") {
+    if (!matchesReason(page, filters.indexReason)) return false;
+    if (!matchesBoolean(page.indexability?.hasNoindex, filters.noindex)) return false;
+    if (!matchesBoolean(page.indexability?.hasNofollow, filters.nofollow)) return false;
+    if (!matchesBoolean(page.indexability?.canonicalized, filters.canonicalized)) return false;
+  }
+
+  if (report === "Headings") {
+    if (!matchesH1Status(page, filters.h1Status)) return false;
+    if (!matchesHeadingHierarchy(page, filters.hierarchy)) return false;
+    if (!matchesH2Status(page, filters.h2Status)) return false;
+  }
+
+  if (report === "Open Graph") {
+    if (!matchesOpenGraphStatus(page, filters.ogStatus)) return false;
+    if (!matchesOpenGraphField(page, "og:image", filters.ogImage)) return false;
+    if (!matchesOpenGraphField(page, "og:title", filters.ogTitle)) return false;
+    if (!matchesDuplicateOpenGraph(page, filters.duplicateOg)) return false;
+  }
+
+  if (report === "Structured Data") {
+    if (!matchesStructuredStatus(page, filters.structuredStatus)) return false;
+    if (!matchesStructuredValidity(page, filters.validity)) return false;
+    if (!matchesStructuredErrors(page, filters.errorStatus)) return false;
+  }
+
+  return true;
+}
+
+function matchesLinkFilters(link: CrawlLink, filters: ReportFilters) {
+  if (filters.linkType === "internal" && !link.isInternal) return false;
+  if (filters.linkType === "external" && link.isInternal) return false;
+  if (!matchesStatusGroup(link.destinationStatus, filters.destinationStatus)) return false;
+  if (filters.destinationStatus === "not-crawled" && link.destinationStatus !== null) return false;
+  if (filters.followStatus === "follow" && !link.isFollowed) return false;
+  if (filters.followStatus === "nofollow" && link.isFollowed) return false;
+  if (!matchesIssueByValue(link.issues, filters.linkIssue)) return false;
+  return true;
+}
+
+function matchesImageFilters(image: CrawlImage, filters: ReportFilters) {
+  if (filters.altStatus === "has-alt" && (!image.hasAltAttribute || !image.alt.trim())) return false;
+  if (filters.altStatus === "missing-alt" && !hasIssue(image.issues, "Missing alt attribute")) return false;
+  if (filters.altStatus === "empty-alt" && !hasIssue(image.issues, "Empty alt text")) return false;
+  if (filters.altStatus === "generic-alt" && !hasIssue(image.issues, "Generic alt text")) return false;
+  if (filters.imageSource === "normal-src" && (!image.src || image.srcset || image.isLazyLoaded)) return false;
+  if (filters.imageSource === "srcset" && !image.srcset) return false;
+  if (filters.imageSource === "lazy-loaded" && !image.isLazyLoaded) return false;
+  if (filters.imageSource === "empty-src" && !hasIssue(image.issues, "Empty image src")) return false;
+  if (filters.dimensions === "complete" && (!image.width || !image.height)) return false;
+  if (filters.dimensions === "missing-width" && !hasIssue(image.issues, "Missing width")) return false;
+  if (filters.dimensions === "missing-height" && !hasIssue(image.issues, "Missing height")) return false;
+  if (filters.dimensions === "missing-both" && !(hasIssue(image.issues, "Missing width") && hasIssue(image.issues, "Missing height"))) return false;
+  if (!matchesIssueStatus(image.issues, filters.issueStatus)) return false;
+  return true;
+}
+
+function matchesSitemapFilters(record: CrawlSitemapRecord, filters: ReportFilters) {
+  if (filters.coverage && filters.coverage !== "all" && record.coverage.toLowerCase().replace(/\s+/g, "-") !== filters.coverage) return false;
+  if (!matchesIndexability(record.indexable, filters.indexability)) return false;
+  if (!matchesStatusGroup(record.status, filters.statusGroup)) return false;
+  if (!matchesIssueByValue(record.issues, filters.sitemapIssue)) return false;
+  return true;
+}
+
+function matchesPsiFilters(record: CrawlPsiRecord, filters: ReportFilters) {
+  if (filters.strategy && filters.strategy !== "all" && record.strategy !== filters.strategy) return false;
+  if (!matchesScoreRange(record.performanceScore, filters.scoreRange)) return false;
+  if (filters.apiStatus === "successful" && record.issues.length > 0) return false;
+  if (filters.apiStatus === "failed" && record.issues.length === 0) return false;
+  if (!matchesPsiVital(record, filters.vitalIssue)) return false;
+  return true;
+}
+
+function matchesStatusGroup(status: number | null, value?: string) {
+  if (!value || value === "all") return true;
+  if (value === "failed" || value === "unknown" || value === "not-crawled") return status === null;
+  if (!status) return false;
+  return `${Math.floor(status / 100)}xx` === value;
+}
+
+function matchesIndexability(isIndexable: boolean | null | undefined, value?: string) {
+  if (!value || value === "all") return true;
+  if (value === "indexable") return isIndexable === true;
+  if (value === "non-indexable") return isIndexable === false;
+  if (value === "unknown") return isIndexable === null || isIndexable === undefined;
+  return true;
+}
+
+function matchesIssueStatus(issues: string[], value?: string) {
+  if (!value || value === "all") return true;
+  if (value === "with-issues") return issues.length > 0;
+  if (value === "no-issues") return issues.length === 0;
+  return true;
+}
+
+function matchesDepth(depth: number, value?: string) {
+  if (!value || value === "all") return true;
+  if (value === "4+") return depth >= 4;
+  return depth === Number(value);
+}
+
+function matchesWordCount(wordCount: number, value?: string) {
+  if (!value || value === "all") return true;
+  if (value === "thin") return wordCount > 0 && wordCount < 300;
+  if (value === "normal") return wordCount >= 300 && wordCount <= 2000;
+  if (value === "high") return wordCount > 2000;
+  return true;
+}
+
+function matchesIssueOption(page: CrawlPage, value: string | undefined, issueMap: Record<string, string>) {
+  if (!value || value === "all") return true;
+  const issue = issueMap[value];
+  return issue ? hasIssue(page.issues, issue) : true;
+}
+
+function matchesCanonicalStatus(page: CrawlPage, value?: string) {
+  if (!value || value === "all") return true;
+  if (value === "missing") return !page.canonical;
+  if (value === "present") return Boolean(page.canonical);
+  if (value === "invalid") return hasIssue(page.issues, "Invalid canonical");
+  if (value === "canonicalized") return hasIssue(page.issues, "Canonicalized URL");
+  if (value === "external") return hasIssue(page.issues, "Canonical points outside site");
+  return true;
+}
+
+function matchesReason(page: CrawlPage, value?: string) {
+  if (!value || value === "all") return true;
+  const reasons = [...(page.indexability?.reasons ?? []), ...page.issues].join(" ").toLowerCase();
+  if (value === "robots-blocked") return reasons.includes("robots");
+  if (value === "http-error") return Boolean(page.status && page.status >= 400);
+  return reasons.includes(value.replace("-", " "));
+}
+
+function matchesBoolean(flag: boolean | undefined, value?: string) {
+  if (!value || value === "all") return true;
+  if (value === "yes") return flag === true;
+  if (value === "no") return flag !== true;
+  return true;
+}
+
+function matchesH1Status(page: CrawlPage, value?: string) {
+  if (!value || value === "all") return true;
+  if (value === "missing") return page.h1.length === 0;
+  if (value === "single") return page.h1.length === 1;
+  if (value === "multiple") return page.h1.length > 1;
+  return true;
+}
+
+function matchesHeadingHierarchy(page: CrawlPage, value?: string) {
+  if (!value || value === "all") return true;
+  const hasFirstHeadingIssue = hasIssue(page.issues, "First heading is not H1");
+  const hasSequentialIssue = hasIssue(page.issues, "Non-sequential heading hierarchy");
+  if (value === "valid") return !hasFirstHeadingIssue && !hasSequentialIssue;
+  if (value === "first-heading-not-h1") return hasFirstHeadingIssue;
+  if (value === "non-sequential") return hasSequentialIssue;
+  return true;
+}
+
+function matchesH2Status(page: CrawlPage, value?: string) {
+  if (!value || value === "all") return true;
+  if (value === "missing") return page.h2.length === 0;
+  if (value === "has-h2") return page.h2.length > 0;
+  return true;
+}
+
+function matchesOpenGraphStatus(page: CrawlPage, value?: string) {
+  if (!value || value === "all") return true;
+  const hasMissing = hasIssue(page.issues, "Missing Open Graph tags");
+  const hasDuplicate = page.issues.some((issue) => issue.toLowerCase().startsWith("duplicate og:"));
+  if (value === "complete") return !hasMissing && !hasDuplicate;
+  if (value === "missing-tags") return hasMissing;
+  if (value === "duplicate-tags") return hasDuplicate;
+  return true;
+}
+
+function matchesOpenGraphField(page: CrawlPage, field: string, value?: string) {
+  if (!value || value === "all") return true;
+  const hasValue = Boolean(page.metadata?.openGraph[field]?.some(Boolean));
+  if (value === "present") return hasValue;
+  if (value === "missing") return !hasValue;
+  return true;
+}
+
+function matchesDuplicateOpenGraph(page: CrawlPage, value?: string) {
+  if (!value || value === "all") return true;
+  const hasDuplicate = page.issues.some((issue) => issue.toLowerCase().startsWith("duplicate og:"));
+  if (value === "any-duplicate") return hasDuplicate;
+  if (value === "no-duplicates") return !hasDuplicate;
+  return true;
+}
+
+function matchesStructuredStatus(page: CrawlPage, value?: string) {
+  if (!value || value === "all") return true;
+  const blocks = page.metadata?.structuredData.jsonLd ?? [];
+  if (value === "present") return blocks.length > 0;
+  if (value === "missing") return blocks.length === 0;
+  return true;
+}
+
+function matchesStructuredValidity(page: CrawlPage, value?: string) {
+  if (!value || value === "all") return true;
+  const blocks = page.metadata?.structuredData.jsonLd ?? [];
+  if (value === "valid") return blocks.length > 0 && blocks.every((block) => block.valid);
+  if (value === "invalid") return blocks.some((block) => !block.valid);
+  return true;
+}
+
+function matchesStructuredErrors(page: CrawlPage, value?: string) {
+  if (!value || value === "all") return true;
+  const hasErrors = Boolean(page.metadata?.structuredData.jsonLd.some((block) => block.errors.length > 0));
+  if (value === "has-errors") return hasErrors;
+  if (value === "no-errors") return !hasErrors;
+  return true;
+}
+
+function matchesIssueByValue(issues: string[], value?: string) {
+  if (!value || value === "all") return true;
+  if (value === "broken-link") return issues.some((issue) => issue.toLowerCase().includes("broken") && issue.toLowerCase().includes("link"));
+  const normalizedNeedle = value.replace(/-/g, " ");
+  return issues.some((issue) => issue.toLowerCase().includes(normalizedNeedle));
+}
+
+function matchesScoreRange(score: number | null, value?: string) {
+  if (!value || value === "all") return true;
+  if (value === "error") return score === null;
+  if (score === null) return false;
+  if (value === "poor") return score <= 49;
+  if (value === "needs-improvement") return score >= 50 && score <= 89;
+  if (value === "good") return score >= 90;
+  return true;
+}
+
+function matchesPsiVital(record: CrawlPsiRecord, value?: string) {
+  if (!value || value === "all") return true;
+  if (value === "slow-fcp") return metricSeconds(record.fcp) > 1.8;
+  if (value === "slow-lcp") return metricSeconds(record.lcp) > 2.5;
+  if (value === "high-tbt") return metricMilliseconds(record.tbt) > 200;
+  if (value === "high-cls") return Number.parseFloat(record.cls) > 0.1;
+  if (value === "high-inp") return metricMilliseconds(record.inp) > 200;
+  return true;
+}
+
+function metricSeconds(value: string) {
+  const number = Number.parseFloat(value);
+  if (Number.isNaN(number)) return 0;
+  return value.toLowerCase().includes("ms") ? number / 1000 : number;
+}
+
+function metricMilliseconds(value: string) {
+  const number = Number.parseFloat(value);
+  if (Number.isNaN(number)) return 0;
+  return value.toLowerCase().includes(" s") || value.toLowerCase().endsWith("s") ? number * 1000 : number;
+}
+
+function hasIssue(issues: string[], issueText: string) {
+  return issues.some((issue) => issue.toLowerCase().includes(issueText.toLowerCase()));
+}
+
 function getReportHeaders(report: ReportTab) {
   if (report === "Metadata") return ["URL", "Title", "Title Count", "Description", "Description Count", "Canonical", "Issues"];
   if (report === "Indexability") return ["URL", "Status", "Indexable", "Noindex", "Nofollow", "Canonicalized", "Reasons"];
@@ -393,13 +892,13 @@ function getReportHeaders(report: ReportTab) {
   if (report === "Links") return ["Source URL", "Destination URL", "Status", "Final URL", "Anchor Text", "Type", "Followed", "Internal", "Indexable", "Issues"];
   if (report === "Images") return ["Page URL", "Image URL", "Srcset", "Alt", "Has Alt", "Width", "Height", "Lazy", "Issues"];
   if (report === "Sitemaps") return ["Sitemap URL", "URL", "Status", "Indexable", "Coverage", "Issues"];
-  if (report === "PageSpeed") return ["URL", "Mobile Score", "Desktop Score", "LCP", "CLS", "INP", "Issues"];
+  if (report === "PageSpeed") return ["URL", "Strategy", "Score", "FCP", "Speed Index", "LCP", "TBT", "CLS", "INP", "Issues"];
   return ["URL", "Status", "Depth", "Title", "Description", "Canonical", "Words", "Issues", "Indexable", "Indexability Reasons", "Inlinks", "Outlinks", "Referrers", "Images"];
 }
 
-function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[], images: CrawlImage[], sitemaps: CrawlSitemapRecord[]) {
+function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[], images: CrawlImage[], sitemaps: CrawlSitemapRecord[], psiResults: CrawlPsiRecord[]) {
   if (report === "Metadata") {
-    return pages.map((page) => (
+    return pages.length ? pages.map((page) => (
       <tr key={`metadata-${page.url}`}>
         <td>{page.url}</td>
         <td>{page.title || "Missing"}</td>
@@ -409,11 +908,11 @@ function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[]
         <td>{page.canonical || "Missing"}</td>
         <td>{issueText(page, ["title", "description", "canonical", "Duplicate"])}</td>
       </tr>
-    ));
+    )) : emptyRow(report, "No matching metadata records. Clear filters or start a crawl.");
   }
 
   if (report === "Indexability") {
-    return pages.map((page) => (
+    return pages.length ? pages.map((page) => (
       <tr key={`indexability-${page.url}`}>
         <td>{page.url}</td>
         <td>{page.status ?? "Fail"}</td>
@@ -423,11 +922,11 @@ function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[]
         <td>{page.indexability?.canonicalized ? "Yes" : "No"}</td>
         <td>{page.indexability?.reasons.join(", ") ?? ""}</td>
       </tr>
-    ));
+    )) : emptyRow(report, "No matching indexability records. Clear filters or start a crawl.");
   }
 
   if (report === "Headings") {
-    return pages.map((page) => (
+    return pages.length ? pages.map((page) => (
       <tr key={`headings-${page.url}`}>
         <td>{page.url}</td>
         <td>{page.h1.length}</td>
@@ -435,11 +934,11 @@ function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[]
         <td>{page.headings?.map((heading) => `H${heading.level}: ${heading.text}`).join(" > ") ?? ""}</td>
         <td>{issueText(page, ["H1", "heading"])}</td>
       </tr>
-    ));
+    )) : emptyRow(report, "No matching heading records. Clear filters or start a crawl.");
   }
 
   if (report === "Open Graph") {
-    return pages.map((page) => {
+    return pages.length ? pages.map((page) => {
       const og = page.metadata?.openGraph ?? {};
       return (
         <tr key={`og-${page.url}`}>
@@ -452,11 +951,11 @@ function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[]
           <td>{issueText(page, ["Open Graph", "og:"])}</td>
         </tr>
       );
-    });
+    }) : emptyRow(report, "No matching Open Graph records. Clear filters or start a crawl.");
   }
 
   if (report === "Structured Data") {
-    return pages.map((page) => {
+    return pages.length ? pages.map((page) => {
       const blocks = page.metadata?.structuredData.jsonLd ?? [];
       const invalid = blocks.filter((block) => !block.valid);
       return (
@@ -467,7 +966,7 @@ function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[]
           <td>{invalid.flatMap((block) => block.errors).join(", ")}</td>
         </tr>
       );
-    });
+    }) : emptyRow(report, "No matching structured data records. Clear filters or start a crawl.");
   }
 
   if (report === "Links") {
@@ -484,7 +983,7 @@ function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[]
         <td>{link.destinationIndexable === null ? "Unknown" : link.destinationIndexable ? "Yes" : "No"}</td>
         <td>{link.issues.join(", ")}</td>
       </tr>
-    )) : emptyRow(report, "No link records yet. Start a crawl to populate this report.");
+    )) : emptyRow(report, "No matching link records. Clear filters or start a crawl.");
   }
 
   if (report === "Images") {
@@ -500,7 +999,7 @@ function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[]
         <td>{image.isLazyLoaded ? "Yes" : "No"}</td>
         <td>{image.issues.join(", ")}</td>
       </tr>
-    )) : emptyRow(report, "No image records yet. Start a crawl to populate this report.");
+    )) : emptyRow(report, "No matching image records. Clear filters or start a crawl.");
   }
 
   if (report === "Sitemaps") {
@@ -513,11 +1012,26 @@ function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[]
         <td>{record.coverage}</td>
         <td>{record.issues.join(", ")}</td>
       </tr>
-    )) : emptyRow(report, "No sitemap URLs found yet. Start a crawl to load robots.txt and sitemap.xml.");
+    )) : emptyRow(report, "No matching sitemap records. Clear filters or start a crawl.");
   }
-  if (report === "PageSpeed") return emptyRow(report, "PageSpeed Insights reports are planned for the PageSpeed phase.");
+  if (report === "PageSpeed") {
+    return psiResults.length ? psiResults.map((record) => (
+      <tr key={`${record.url}-${record.strategy}`}>
+        <td>{record.url}</td>
+        <td>{record.strategy}</td>
+        <td>{scoreText(record.performanceScore)}</td>
+        <td>{record.fcp}</td>
+        <td>{record.speedIndex}</td>
+        <td>{record.lcp}</td>
+        <td>{record.tbt}</td>
+        <td>{record.cls}</td>
+        <td>{record.inp}</td>
+        <td>{record.issues.join(", ")}</td>
+      </tr>
+    )) : emptyRow(report, "No matching PageSpeed records. Clear filters or enable PageSpeed before crawling.");
+  }
 
-  return pages.map((page) => (
+  return pages.length ? pages.map((page) => (
     <tr key={`overview-${page.url}`}>
       <td>{page.url}</td>
       <td>{page.status ?? "Fail"}</td>
@@ -534,7 +1048,7 @@ function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[]
       <td>{page.referrerUrls?.join(", ") ?? ""}</td>
       <td>{page.imageCount ?? 0}</td>
     </tr>
-  ));
+  )) : emptyRow(report, "No matching URL records. Clear filters or start a crawl.");
 }
 
 function issueText(page: CrawlPage, terms: string[]) {
@@ -543,6 +1057,10 @@ function issueText(page: CrawlPage, terms: string[]) {
 
 function firstValue(values?: string[]) {
   return values?.find(Boolean) ?? "Missing";
+}
+
+function scoreText(score: number | null) {
+  return score === null ? "Error" : String(score);
 }
 
 function emptyRow(report: ReportTab, message: string) {
