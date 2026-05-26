@@ -33,7 +33,7 @@ const emptyStats: CrawlStats = {
 };
 
 const statusColors = ["#137c5a", "#2d6cdf", "#c67b19", "#b13b3b", "#5b6270"];
-const reportTabs = ["Overview", "Metadata", "Indexability", "Headings", "Open Graph", "Structured Data", "Links", "Images", "Sitemaps", "PageSpeed"] as const;
+const reportTabs = ["Overview", "Metadata", "Indexability", "Headings", "Open Graph", "Structured Data", "Links", "Images", "Sitemaps", "PageSpeed", "Compare"] as const;
 type ReportTab = (typeof reportTabs)[number];
 type ReportFilters = Record<string, string>;
 type ReportFilterConfig = {
@@ -42,6 +42,29 @@ type ReportFilterConfig = {
   options: { label: string; value: string }[];
 };
 type ReportFilterState = Record<ReportTab, ReportFilters>;
+type PreviousCrawlRow = {
+  url: string;
+  finalUrl: string;
+  status: string;
+  title: string;
+  description: string;
+  canonical: string;
+  indexable: string;
+  wordCount: string;
+  issues: string;
+};
+type CompareRow = {
+  url: string;
+  changeType: "New" | "Removed" | "Changed";
+  statusChange: string;
+  titleChange: string;
+  descriptionChange: string;
+  canonicalChange: string;
+  indexabilityChange: string;
+  wordCountChange: string;
+  issuesAdded: string[];
+  issuesFixed: string[];
+};
 
 function createEmptyReportFilters(): ReportFilterState {
   return Object.fromEntries(reportTabs.map((tab) => [tab, {}])) as ReportFilterState;
@@ -68,6 +91,50 @@ function parseUrlList(text: string) {
   return Array.from(urls);
 }
 
+function parseCsv(text: string) {
+  const rows: string[][] = [];
+  let cell = "";
+  let row: string[] = [];
+  let inQuotes = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (char === '"' && inQuotes && next === '"') {
+      cell += '"';
+      index += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (char === "," && !inQuotes) {
+      row.push(cell);
+      cell = "";
+      continue;
+    }
+
+    if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && next === "\n") index += 1;
+      row.push(cell);
+      if (row.some((value) => value.trim())) rows.push(row);
+      row = [];
+      cell = "";
+      continue;
+    }
+
+    cell += char;
+  }
+
+  row.push(cell);
+  if (row.some((value) => value.trim())) rows.push(row);
+  return rows;
+}
+
 export function App() {
   const engineRef = useRef(new EngineClient());
   const subscribedRef = useRef(false);
@@ -84,6 +151,9 @@ export function App() {
   const [reportFiltersByTab, setReportFiltersByTab] = useState<ReportFilterState>(() => createEmptyReportFilters());
   const [urlListFileName, setUrlListFileName] = useState("");
   const [urlListError, setUrlListError] = useState("");
+  const [previousCsvName, setPreviousCsvName] = useState("");
+  const [previousRows, setPreviousRows] = useState<PreviousCrawlRow[]>([]);
+  const [compareError, setCompareError] = useState("");
   const [logs, setLogs] = useState<string[]>(["Ready to crawl."]);
   const [crawlElapsedMs, setCrawlElapsedMs] = useState(0);
   const crawlStartedAtRef = useRef<number | null>(null);
@@ -161,6 +231,25 @@ export function App() {
       return matchesQuery && matchesPsiFilters(record, reportFilters);
     });
   }, [psiResults, query, reportFilters]);
+
+  const compareRows = useMemo(() => buildCompareRows(previousRows, pages), [pages, previousRows]);
+
+  const filteredCompareRows = useMemo(() => {
+    const normalizedQuery = query.toLowerCase();
+    return compareRows.filter((record) => {
+      const matchesQuery =
+        !normalizedQuery ||
+        record.url.toLowerCase().includes(normalizedQuery) ||
+        record.changeType.toLowerCase().includes(normalizedQuery) ||
+        record.statusChange.toLowerCase().includes(normalizedQuery) ||
+        record.titleChange.toLowerCase().includes(normalizedQuery) ||
+        record.descriptionChange.toLowerCase().includes(normalizedQuery) ||
+        record.canonicalChange.toLowerCase().includes(normalizedQuery) ||
+        record.issuesAdded.join(" ").toLowerCase().includes(normalizedQuery) ||
+        record.issuesFixed.join(" ").toLowerCase().includes(normalizedQuery);
+      return matchesQuery && matchesCompareFilters(record, reportFilters);
+    });
+  }, [compareRows, query, reportFilters]);
 
   useEffect(() => {
     if (status !== "running") return;
@@ -304,7 +393,7 @@ export function App() {
   const activeFilterConfigs = getReportFilterConfigs(activeReport);
   const activeFilterKeys = activeFilterConfigs.map((filter) => filter.key);
   const hasActiveFilters = activeFilterKeys.some((key) => (reportFilters[key] ?? "all") !== "all");
-  const reportRows = getReportRows(activeReport, filteredPages, filteredLinks, filteredImages, filteredSitemaps, filteredPsiResults);
+  const reportRows = getReportRows(activeReport, filteredPages, filteredLinks, filteredImages, filteredSitemaps, filteredPsiResults, filteredCompareRows);
 
   function updateActiveFilter(key: string, value: string) {
     setReportFiltersByTab((current) => ({
@@ -364,13 +453,44 @@ export function App() {
     }));
   }
 
+  async function handlePreviousCsvUpload(file: File | undefined) {
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const parsedRows = parsePreviousReportCsv(text);
+      if (parsedRows.length === 0) {
+        setCompareError("No comparable URL rows found.");
+        setPreviousRows([]);
+        setPreviousCsvName(file.name);
+        return;
+      }
+
+      setPreviousCsvName(file.name);
+      setPreviousRows(parsedRows);
+      setCompareError("");
+      setActiveReport("Compare");
+      setLogs((current) => [`Loaded previous CSV ${file.name} with ${parsedRows.length} URL(s).`, ...current].slice(0, 8));
+    } catch (error) {
+      setCompareError(error instanceof Error ? error.message : "Could not read previous CSV.");
+      setPreviousRows([]);
+      setPreviousCsvName(file.name);
+    }
+  }
+
+  function clearPreviousCsv() {
+    setPreviousCsvName("");
+    setPreviousRows([]);
+    setCompareError("");
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
         <div className="brand">
           <Activity size={24} />
           <div>
-            <strong>Scout SEO</strong>
+            <strong>BOLD SEO</strong>
             <span>Desktop crawler</span>
           </div>
         </div>
@@ -493,10 +613,23 @@ export function App() {
             <strong>{status.toUpperCase()}</strong>
             <span className="crawl-timer">{formatDuration(crawlElapsedMs)}</span>
           </div>
-          <button onClick={() => engineRef.current.exportCsv("all-urls")}>
-            <Download size={16} /> CSV
-          </button>
+          <div className="topbar-actions">
+            <label className="compare-upload">
+              <Upload size={16} /> Compare CSV
+              <input type="file" accept=".csv,text/csv" onChange={(event) => void handlePreviousCsvUpload(event.target.files?.[0])} />
+            </label>
+            <button onClick={() => engineRef.current.exportCsv("all-urls")}>
+              <Download size={16} /> CSV
+            </button>
+          </div>
         </header>
+
+        {previousCsvName || compareError ? (
+          <section className="compare-banner">
+            <span>{compareError || `Comparing current crawl against ${previousCsvName}`}</span>
+            <button type="button" onClick={clearPreviousCsv}>Clear comparison</button>
+          </section>
+        ) : null}
 
         <section className="metrics">
           <Metric label="Discovered" value={stats.discovered} />
@@ -677,6 +810,16 @@ function getReportFilterConfigs(report: ReportTab): ReportFilterConfig[] {
     ];
   }
 
+  if (report === "Compare") {
+    return [
+      optionGroup("changeType", "Change", ["New", "Removed", "Changed"]),
+      optionGroup("statusChange", "Status", ["Changed", "Became 4xx", "Became 5xx", "Fixed to 2xx"]),
+      optionGroup("metadataChange", "Metadata", ["Title", "Description", "Canonical"]),
+      optionGroup("issueDelta", "Issues", ["New issue", "Fixed issue"]),
+      optionGroup("indexabilityChange", "Indexability", ["Changed", "Became non-indexable", "Became indexable"])
+    ];
+  }
+
   return [
     optionGroup("statusGroup", "Status", ["2xx", "3xx", "4xx", "5xx", "Failed"]),
     optionGroup("indexability", "Indexability", ["Indexable", "Non-indexable", "Unknown"]),
@@ -701,7 +844,7 @@ function clearReportFilters(filters: ReportFilters, activeKeys: string[]) {
 }
 
 function matchesPageReportFilters(page: CrawlPage, report: ReportTab, filters: ReportFilters) {
-  if (report === "Links" || report === "Images" || report === "Sitemaps" || report === "PageSpeed") return true;
+  if (report === "Links" || report === "Images" || report === "Sitemaps" || report === "PageSpeed" || report === "Compare") return true;
 
   if (!matchesStatusGroup(page.status, filters.statusGroup)) return false;
   if (!matchesIndexability(page.indexability?.isIndexable, filters.indexability)) return false;
@@ -800,6 +943,28 @@ function matchesPsiFilters(record: CrawlPsiRecord, filters: ReportFilters) {
   if (filters.apiStatus === "successful" && record.issues.length > 0) return false;
   if (filters.apiStatus === "failed" && record.issues.length === 0) return false;
   if (!matchesPsiVital(record, filters.vitalIssue)) return false;
+  return true;
+}
+
+function matchesCompareFilters(record: CompareRow, filters: ReportFilters) {
+  if (filters.changeType && filters.changeType !== "all" && record.changeType.toLowerCase() !== filters.changeType) return false;
+
+  if (filters.statusChange === "changed" && !record.statusChange) return false;
+  if (filters.statusChange === "became-4xx" && !becameStatusGroup(record.statusChange, "4")) return false;
+  if (filters.statusChange === "became-5xx" && !becameStatusGroup(record.statusChange, "5")) return false;
+  if (filters.statusChange === "fixed-to-2xx" && !fixedToStatusGroup(record.statusChange, "2")) return false;
+
+  if (filters.metadataChange === "title" && !record.titleChange) return false;
+  if (filters.metadataChange === "description" && !record.descriptionChange) return false;
+  if (filters.metadataChange === "canonical" && !record.canonicalChange) return false;
+
+  if (filters.issueDelta === "new-issue" && record.issuesAdded.length === 0) return false;
+  if (filters.issueDelta === "fixed-issue" && record.issuesFixed.length === 0) return false;
+
+  if (filters.indexabilityChange === "changed" && !record.indexabilityChange) return false;
+  if (filters.indexabilityChange === "became-non-indexable" && !record.indexabilityChange.endsWith("No")) return false;
+  if (filters.indexabilityChange === "became-indexable" && !record.indexabilityChange.endsWith("Yes")) return false;
+
   return true;
 }
 
@@ -988,6 +1153,181 @@ function hasIssue(issues: string[], issueText: string) {
   return issues.some((issue) => issue.toLowerCase().includes(issueText.toLowerCase()));
 }
 
+function becameStatusGroup(statusChange: string, group: string) {
+  const next = statusChange.split(" -> ")[1] ?? "";
+  return next.startsWith(group);
+}
+
+function fixedToStatusGroup(statusChange: string, group: string) {
+  const [previous, next] = statusChange.split(" -> ");
+  return Boolean(previous && next?.startsWith(group) && !previous.startsWith(group));
+}
+
+function parsePreviousReportCsv(text: string): PreviousCrawlRow[] {
+  const rows = parseCsv(text);
+  if (rows.length < 2) return [];
+
+  const headers = rows[0].map((header) => header.trim().toLowerCase());
+  const indexFor = (name: string) => headers.indexOf(name.toLowerCase());
+  const urlIndex = indexFor("url");
+  if (urlIndex === -1) return [];
+
+  const rowFor = (values: string[]): PreviousCrawlRow => ({
+    url: values[urlIndex]?.trim() ?? "",
+    finalUrl: valueAt(values, indexFor("finalUrl")),
+    status: valueAt(values, indexFor("status")),
+    title: valueAt(values, indexFor("title")),
+    description: valueAt(values, indexFor("description")),
+    canonical: valueAt(values, indexFor("canonical")),
+    indexable: valueAt(values, indexFor("indexable")),
+    wordCount: valueAt(values, indexFor("wordCount")),
+    issues: valueAt(values, indexFor("issues"))
+  });
+
+  return rows
+    .slice(1)
+    .map(rowFor)
+    .filter((row) => row.url);
+}
+
+function valueAt(values: string[], index: number) {
+  if (index < 0) return "";
+  return values[index]?.trim() ?? "";
+}
+
+function buildCompareRows(previousRows: PreviousCrawlRow[], currentPages: CrawlPage[]): CompareRow[] {
+  if (previousRows.length === 0 || currentPages.length === 0) return [];
+
+  const previousByUrl = new Map(previousRows.map((row) => [normalizeCompareUrl(row.url), row]));
+  const currentByUrl = new Map(currentPages.map((page) => [normalizeCompareUrl(page.url), page]));
+  const urls = new Set([...previousByUrl.keys(), ...currentByUrl.keys()]);
+  const rows: CompareRow[] = [];
+
+  for (const url of urls) {
+    const previous = previousByUrl.get(url);
+    const current = currentByUrl.get(url);
+
+    if (!previous && current) {
+      rows.push({
+        url: current.url,
+        changeType: "New",
+        statusChange: `Missing -> ${statusLabel(current.status)}`,
+        titleChange: `Missing -> ${current.title || "Missing"}`,
+        descriptionChange: current.description ? "Missing -> Present" : "",
+        canonicalChange: current.canonical ? "Missing -> Present" : "",
+        indexabilityChange: `Missing -> ${indexableLabel(current.indexability?.isIndexable)}`,
+        wordCountChange: `0 -> ${current.wordCount}`,
+        issuesAdded: current.issues,
+        issuesFixed: []
+      });
+      continue;
+    }
+
+    if (previous && !current) {
+      rows.push({
+        url: previous.url,
+        changeType: "Removed",
+        statusChange: `${previous.status || "Missing"} -> Missing`,
+        titleChange: previous.title ? `${previous.title} -> Missing` : "",
+        descriptionChange: previous.description ? "Present -> Missing" : "",
+        canonicalChange: previous.canonical ? "Present -> Missing" : "",
+        indexabilityChange: `${previous.indexable || "Unknown"} -> Missing`,
+        wordCountChange: `${previous.wordCount || 0} -> 0`,
+        issuesAdded: [],
+        issuesFixed: splitIssueList(previous.issues)
+      });
+      continue;
+    }
+
+    if (!previous || !current) continue;
+
+    const issuesAdded = diffList(splitIssueList(csvIssueText(previous)), current.issues);
+    const issuesFixed = diffList(current.issues, splitIssueList(csvIssueText(previous)));
+    const row: CompareRow = {
+      url: current.url,
+      changeType: "Changed",
+      statusChange: changedText(previous.status, statusLabel(current.status)),
+      titleChange: changedText(previous.title, current.title),
+      descriptionChange: changedText(previous.description, current.description),
+      canonicalChange: changedText(previous.canonical, current.canonical),
+      indexabilityChange: changedText(normalizeIndexable(previous.indexable), indexableLabel(current.indexability?.isIndexable)),
+      wordCountChange: changedText(previous.wordCount, String(current.wordCount)),
+      issuesAdded,
+      issuesFixed
+    };
+
+    if (hasCompareChanges(row)) rows.push(row);
+  }
+
+  return rows.sort((a, b) => changeRank(a.changeType) - changeRank(b.changeType) || a.url.localeCompare(b.url));
+}
+
+function hasCompareChanges(row: CompareRow) {
+  return Boolean(
+    row.statusChange ||
+      row.titleChange ||
+      row.descriptionChange ||
+      row.canonicalChange ||
+      row.indexabilityChange ||
+      row.wordCountChange ||
+      row.issuesAdded.length ||
+      row.issuesFixed.length
+  );
+}
+
+function changeRank(changeType: CompareRow["changeType"]) {
+  if (changeType === "New") return 0;
+  if (changeType === "Removed") return 1;
+  return 2;
+}
+
+function normalizeCompareUrl(value: string) {
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    if (url.pathname !== "/" && url.pathname.endsWith("/")) url.pathname = url.pathname.slice(0, -1);
+    return url.href;
+  } catch {
+    return value.trim();
+  }
+}
+
+function statusLabel(status: number | null) {
+  return status === null ? "Failed" : String(status);
+}
+
+function indexableLabel(value: boolean | undefined) {
+  if (value === true) return "Yes";
+  if (value === false) return "No";
+  return "Unknown";
+}
+
+function normalizeIndexable(value: string) {
+  if (value === "true") return "Yes";
+  if (value === "false") return "No";
+  return value || "Unknown";
+}
+
+function changedText(previous: string, current: string) {
+  const previousValue = previous || "Missing";
+  const currentValue = current || "Missing";
+  return previousValue === currentValue ? "" : `${previousValue} -> ${currentValue}`;
+}
+
+function splitIssueList(value: string | string[]) {
+  if (Array.isArray(value)) return value.map((issue) => issue.trim()).filter(Boolean);
+  return value.split(";").map((issue) => issue.trim()).filter(Boolean);
+}
+
+function csvIssueText(row: PreviousCrawlRow) {
+  return row.issues;
+}
+
+function diffList(previous: string[], current: string[]) {
+  const previousSet = new Set(previous.map((item) => item.toLowerCase()));
+  return current.filter((item) => !previousSet.has(item.toLowerCase()));
+}
+
 function getReportHeaders(report: ReportTab) {
   if (report === "Metadata") return ["URL", "Title", "Title Count", "Description", "Description Count", "Canonical", "Issues"];
   if (report === "Indexability") return ["URL", "Status", "Indexable", "Noindex", "Nofollow", "Canonicalized", "Reasons"];
@@ -998,10 +1338,11 @@ function getReportHeaders(report: ReportTab) {
   if (report === "Images") return ["Page URL", "Image URL", "Srcset", "Alt", "Has Alt", "Width", "Height", "Lazy", "Issues"];
   if (report === "Sitemaps") return ["Sitemap URL", "URL", "Status", "Indexable", "Coverage", "Issues"];
   if (report === "PageSpeed") return ["URL", "Strategy", "Score", "FCP", "Speed Index", "LCP", "TBT", "CLS", "INP", "Issues"];
+  if (report === "Compare") return ["URL", "Change", "Status", "Title", "Description", "Canonical", "Indexability", "Words", "New Issues", "Fixed Issues"];
   return ["URL", "Status", "Depth", "Title", "Description", "Canonical", "Words", "Issues", "Indexable", "Indexability Reasons", "Inlinks", "Outlinks", "Referrers", "Images"];
 }
 
-function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[], images: CrawlImage[], sitemaps: CrawlSitemapRecord[], psiResults: CrawlPsiRecord[]) {
+function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[], images: CrawlImage[], sitemaps: CrawlSitemapRecord[], psiResults: CrawlPsiRecord[], compareRows: CompareRow[]) {
   if (report === "Metadata") {
     return pages.length ? pages.map((page) => (
       <tr key={`metadata-${page.url}`}>
@@ -1134,6 +1475,23 @@ function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[]
         <td>{record.issues.join(", ")}</td>
       </tr>
     )) : emptyRow(report, "No matching PageSpeed records. Clear filters or enable PageSpeed before crawling.");
+  }
+
+  if (report === "Compare") {
+    return compareRows.length ? compareRows.map((record) => (
+      <tr key={`compare-${record.url}`}>
+        <td>{record.url}</td>
+        <td>{record.changeType}</td>
+        <td>{record.statusChange}</td>
+        <td>{record.titleChange}</td>
+        <td>{record.descriptionChange}</td>
+        <td>{record.canonicalChange}</td>
+        <td>{record.indexabilityChange}</td>
+        <td>{record.wordCountChange}</td>
+        <td>{record.issuesAdded.join(", ")}</td>
+        <td>{record.issuesFixed.join(", ")}</td>
+      </tr>
+    )) : emptyRow(report, "Upload a previous CSV and run a current crawl to compare changes.");
   }
 
   return pages.length ? pages.map((page) => (

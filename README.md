@@ -35,6 +35,8 @@ PageSpeed Insights support has started. PageSpeed checks are optional and run af
 
 URL-list crawling is now available. Users can switch the crawl mode to only uploaded URLs, upload a `.txt` or `.csv` file containing absolute URLs, and the crawler will fetch only those listed pages while still extracting metadata, links, images, indexability, and report data from them.
 
+Crawl comparison has started. Users can upload a previous Scout CSV export, compare it against the current crawl, and review new URLs, removed URLs, changed status codes, metadata changes, indexability changes, word-count changes, new issues, and fixed issues in the Compare report.
+
 ## Technology Stack
 
 | Layer | Technology | Current Usage |
@@ -399,11 +401,30 @@ Current validation rules:
   - Images
   - Sitemaps
   - PageSpeed
+  - Compare
+
+### Crawl Comparison
+
+- Upload a previous Scout CSV export.
+- Compare the previous export against the current crawl by URL.
+- Detect:
+  - New URLs
+  - Removed URLs
+  - Status changes
+  - Title changes
+  - Description changes
+  - Canonical changes
+  - Indexability changes
+  - Word-count changes
+  - New issues
+  - Fixed issues
+- Filter comparison rows by change type, status change, metadata change, issue delta, and indexability change.
 
 ### Export
 
 - CSV export for crawled page data.
 - Export includes:
+  - Export version
   - URL
   - Final URL
   - Status

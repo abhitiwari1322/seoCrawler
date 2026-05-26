@@ -219,6 +219,60 @@ button:disabled {
   gap: 10px;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.compare-upload {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid #d7e0e7;
+  border-radius: 6px;
+  padding: 0 14px;
+  background: #fff;
+  color: #42505c;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.compare-upload input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.compare-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -8px 0 18px;
+  border: 1px solid #c7dbd2;
+  border-radius: 8px;
+  padding: 9px 12px;
+  background: #eef8f4;
+  color: #285544;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.compare-banner button {
+  min-height: 30px;
+  border: 1px solid #a9c9bd;
+  padding: 0 10px;
+  color: #285544;
+  background: #fff;
+  font-size: 12px;
+}
+
 .status-dot {
   width: 12px;
   height: 12px;

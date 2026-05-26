@@ -448,8 +448,9 @@ class Crawler {
     const dir = join(tmpdir(), "scout-seo-exports");
     await mkdir(dir, { recursive: true });
     const filePath = join(dir, `${report}-${Date.now()}.csv`);
-    const header = ["url", "finalUrl", "status", "depth", "title", "description", "canonical", "indexable", "wordCount", "incomingInternalLinks", "outgoingInternalLinks", "referrerUrls", "issues"];
+    const header = ["exportVersion", "url", "finalUrl", "status", "depth", "title", "description", "canonical", "indexable", "wordCount", "incomingInternalLinks", "outgoingInternalLinks", "referrerUrls", "issues"];
     const rows = this.pages.map((page) => [
+      "1",
       page.url,
       page.finalUrl,
       page.status ?? "",
