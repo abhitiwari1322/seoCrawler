@@ -1,0 +1,18 @@
+{
+  "urlTypes": {
+    "htmlLinks": true,
+    "images": true,
+    "stylesheets": true,
+    "scripts": true,
+    "iframes": true,
+    "media": true,
+    "documents": true,
+    "cssImports": true,
+    "cssUrls": false,
+    "metaRefresh": true,
+    "redirectFinalUrls": true
+  },
+  "excludeExtensions": [],
+  "includeUrlPatterns": [],
+  "excludeUrlPatterns": []
+}

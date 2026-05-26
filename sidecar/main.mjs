@@ -1,10 +1,30 @@
 #!/usr/bin/env node
 import { createInterface } from "node:readline";
+import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import * as cheerio from "cheerio";
 import robotsParser from "robots-parser";
+
+const DEFAULT_CRAWLER_CONFIG = {
+  urlTypes: {
+    htmlLinks: true,
+    images: true,
+    stylesheets: true,
+    scripts: true,
+    iframes: true,
+    media: true,
+    documents: true,
+    cssImports: true,
+    cssUrls: false,
+    metaRefresh: true,
+    redirectFinalUrls: true
+  },
+  excludeExtensions: [],
+  includeUrlPatterns: [],
+  excludeUrlPatterns: []
+};
 
 const emit = (type, payload) => {
   process.stdout.write(JSON.stringify({ type, payload }) + "\n");
@@ -17,6 +37,7 @@ class Crawler {
 
   reset() {
     this.settings = null;
+    this.config = loadCrawlerConfig();
     this.root = null;
     this.origin = "";
     this.queue = [];
@@ -48,7 +69,7 @@ class Crawler {
     this.origin = this.root.origin;
     this.status = "running";
     this.startedAt = Date.now();
-    for (const seedUrl of seedUrls) this.enqueue(seedUrl, 0);
+    for (const seedUrl of seedUrls) this.enqueue(seedUrl, 0, undefined, this.root?.href, "htmlLinks");
     emit("status", this.status);
     emit("log", settings.crawlMode === "url-list" ? `Started URL-list crawl for ${seedUrls.length} URL(s).` : `Started crawl for ${this.root.href}`);
 
@@ -163,11 +184,12 @@ class Crawler {
     }
   }
 
-  enqueue(rawUrl, depth, discoveredFrom, baseUrl = this.root?.href) {
+  enqueue(rawUrl, depth, discoveredFrom, baseUrl = this.root?.href, urlType = "htmlLinks") {
     if (this.seen.size >= this.settings.maxUrls) return;
     const normalized = this.normalize(rawUrl, baseUrl);
     if (!normalized || this.seen.has(normalized)) return;
     if (!normalized.startsWith(this.origin)) return;
+    if (!this.shouldIncludeUrl(normalized, urlType)) return;
     if (this.settings.crawlMode === "url-list" && !this.allowedSpecificUrls.has(normalized)) return;
     if (depth > this.settings.maxDepth) return;
     if (this.robots && !this.robots.isAllowed(normalized, this.settings.userAgent)) {
@@ -176,7 +198,19 @@ class Crawler {
     }
 
     this.seen.add(normalized);
-    this.queue.push({ url: normalized, depth, discoveredFrom });
+    this.queue.push({ url: normalized, depth, discoveredFrom, urlType });
+  }
+
+  shouldIncludeUrl(url, urlType) {
+    if (!this.config.urlTypes?.[urlType]) return false;
+
+    const extension = extensionFromUrl(url);
+    if (extension && this.config.excludeExtensions?.map((value) => value.toLowerCase()).includes(extension)) return false;
+
+    if (this.config.includeUrlPatterns?.length > 0 && !matchesAnyPattern(url, this.config.includeUrlPatterns)) return false;
+    if (matchesAnyPattern(url, this.config.excludeUrlPatterns ?? [])) return false;
+
+    return true;
   }
 
   normalize(rawUrl, baseUrl = this.root?.href) {
@@ -217,12 +251,17 @@ class Crawler {
         headers: { "user-agent": this.settings.userAgent }
       });
       const contentType = response.headers.get("content-type") ?? "";
-      const html = contentType.includes("text/html") ? await response.text() : "";
-      const page = this.extractPage(item, response, html, contentType);
+      const isHtml = contentType.includes("text/html");
+      const isCss = isCssContentType(contentType);
+      const body = isHtml || isCss ? await response.text() : "";
+      const page = this.extractPage(item, response, isHtml ? body : "", contentType);
       this.storePage(page);
       this.pages.push(page);
       emit("page", page);
-      if (html) this.discoverLinks(item, html);
+      this.enqueueRedirectFinalUrl(item, response);
+      if (isHtml && body) this.discoverLinks(item, body);
+      if (response.ok && isHtml && body) this.discoverResources(item, body);
+      if (isCss && body) this.discoverCssResources(item, body);
     } catch (error) {
       const page = {
         url: item.url,
@@ -365,8 +404,70 @@ class Crawler {
 
       this.store.links.push(link);
       emit("link", link);
-      if (isInternal && this.settings.crawlMode !== "url-list") this.enqueue(href, item.depth + 1, item.url, item.url);
+      if (isInternal && this.settings.crawlMode !== "url-list") this.enqueue(href, item.depth + 1, item.url, item.url, "htmlLinks");
     });
+  }
+
+  discoverResources(item, html) {
+    const $ = cheerio.load(html);
+
+    this.enqueueElementUrls($, item, "img", ["src", "data-src", "data-lazy-src", "data-original"], "images");
+    this.enqueueSrcsetUrls($, item, "img[srcset], source[srcset]", "images");
+    this.enqueueElementUrls($, item, 'link[rel~="stylesheet"], link[as="style"]', ["href"], "stylesheets");
+    this.enqueueElementUrls($, item, 'link[rel~="icon"], link[rel="shortcut icon"]', ["href"], "images");
+    this.enqueueElementUrls($, item, "script[src]", ["src"], "scripts");
+    this.enqueueElementUrls($, item, "iframe[src], frame[src]", ["src"], "iframes");
+    this.enqueueElementUrls($, item, "source[src], video[src], audio[src], video[poster]", ["src", "poster"], "media");
+    this.enqueueElementUrls($, item, "embed[src], object[data]", ["src", "data"], "documents");
+
+    $("meta[http-equiv]").each((_, element) => {
+      const httpEquiv = clean($(element).attr("http-equiv") ?? "").toLowerCase();
+      if (httpEquiv !== "refresh") return;
+      const refreshUrl = extractMetaRefreshUrl($(element).attr("content") ?? "");
+      if (refreshUrl) this.enqueue(refreshUrl, item.depth + 1, item.url, item.url, "metaRefresh");
+    });
+
+    $("[style]").each((_, element) => {
+      for (const url of extractCssUrls($(element).attr("style") ?? "")) {
+        this.enqueue(url, item.depth + 1, item.url, item.url, "cssUrls");
+      }
+    });
+
+    $("style").each((_, element) => {
+      this.discoverCssResources(item, $(element).text());
+    });
+  }
+
+  enqueueElementUrls($, item, selector, attributes, urlType) {
+    $(selector).each((_, element) => {
+      for (const attribute of attributes) {
+        const value = clean($(element).attr(attribute) ?? "");
+        if (value) this.enqueue(value, item.depth + 1, item.url, item.url, urlType);
+      }
+    });
+  }
+
+  enqueueSrcsetUrls($, item, selector, urlType) {
+    $(selector).each((_, element) => {
+      const url = firstSrcsetCandidate($(element).attr("srcset") ?? "");
+      if (url) this.enqueue(url, item.depth + 1, item.url, item.url, urlType);
+    });
+  }
+
+  discoverCssResources(item, css) {
+    for (const url of extractCssImports(css)) {
+      this.enqueue(url, item.depth + 1, item.url, item.url, "cssImports");
+    }
+
+    for (const url of extractCssUrls(css)) {
+      this.enqueue(url, item.depth + 1, item.url, item.url, "cssUrls");
+    }
+  }
+
+  enqueueRedirectFinalUrl(item, response) {
+    const finalUrl = this.normalize(response.url, item.url);
+    if (!finalUrl || finalUrl === item.url || !finalUrl.startsWith(this.origin)) return;
+    this.enqueue(finalUrl, item.depth + 1, item.url, item.url, "redirectFinalUrls");
   }
 
   extractImages(item, $) {
@@ -593,8 +694,83 @@ function createEmptyStore() {
   };
 }
 
+function loadCrawlerConfig() {
+  try {
+    const config = JSON.parse(readFileSync("crawler.config.json", "utf8"));
+    return {
+      ...DEFAULT_CRAWLER_CONFIG,
+      ...config,
+      urlTypes: {
+        ...DEFAULT_CRAWLER_CONFIG.urlTypes,
+        ...(config.urlTypes ?? {})
+      },
+      excludeExtensions: config.excludeExtensions ?? DEFAULT_CRAWLER_CONFIG.excludeExtensions,
+      includeUrlPatterns: config.includeUrlPatterns ?? DEFAULT_CRAWLER_CONFIG.includeUrlPatterns,
+      excludeUrlPatterns: config.excludeUrlPatterns ?? DEFAULT_CRAWLER_CONFIG.excludeUrlPatterns
+    };
+  } catch {
+    return DEFAULT_CRAWLER_CONFIG;
+  }
+}
+
 function clean(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function extensionFromUrl(value) {
+  try {
+    const url = new URL(value);
+    const match = url.pathname.toLowerCase().match(/\.([a-z0-9]+)$/);
+    return match ? `.${match[1]}` : "";
+  } catch {
+    return "";
+  }
+}
+
+function matchesAnyPattern(value, patterns) {
+  return patterns.some((pattern) => {
+    try {
+      return new RegExp(pattern).test(value);
+    } catch {
+      return value.includes(pattern);
+    }
+  });
+}
+
+function isCssContentType(contentType) {
+  return /text\/css/i.test(contentType);
+}
+
+function extractMetaRefreshUrl(value) {
+  return value.match(/url\s*=\s*([^;]+)/i)?.[1]?.trim().replace(/^["']|["']$/g, "") ?? "";
+}
+
+function extractCssImports(css) {
+  const urls = [];
+  const importRegex = /@import\s+(?:url\()?["']?([^"')\s;]+)["']?\)?/gi;
+  let match;
+  while ((match = importRegex.exec(css)) !== null) {
+    if (match[1]) urls.push(match[1]);
+  }
+  return urls;
+}
+
+function extractCssUrls(css) {
+  const urls = [];
+  const urlRegex = /url\(\s*["']?([^"')]+)["']?\s*\)/gi;
+  let match;
+  while ((match = urlRegex.exec(css)) !== null) {
+    const url = match[1]?.trim();
+    if (url && !url.startsWith("data:")) urls.push(url);
+  }
+  return urls;
+}
+
+function srcsetCandidates(srcset) {
+  return srcset
+    .split(",")
+    .map((candidate) => candidate.trim().split(/\s+/)[0])
+    .filter(Boolean);
 }
 
 function extractRobotsSitemaps(body) {

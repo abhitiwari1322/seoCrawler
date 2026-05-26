@@ -61,6 +61,7 @@ Crawl comparison has started. Users can upload a previous Scout CSV export, comp
 ```text
 .
 ├── README.md
+├── crawler.config.json
 ├── package.json
 ├── package-lock.json
 ├── index.html
@@ -101,6 +102,7 @@ Crawl comparison has started. Users can upload a previous Scout CSV export, comp
 - `src/engineClient.ts`: Frontend-to-sidecar client using Tauri shell APIs.
 - `src/types.ts`: Shared TypeScript types for crawl settings, status, stats, pages, and events.
 - `sidecar/main.mjs`: Node crawler engine.
+- `crawler.config.json`: Baseline URL type include/exclude configuration for resource discovery.
 - `scripts/build-sidecar.mjs`: Builds the Node engine into a platform-specific Tauri sidecar binary.
 - `scripts/generate-icons.mjs`: Generates the required Tauri icon files.
 - `src-tauri/src/lib.rs`: Minimal Tauri bootstrap, plugin registration, and startup window focus.
@@ -259,6 +261,16 @@ src-tauri/target/release/bundle/dmg/Scout SEO Crawler_0.1.0_aarch64.dmg
 - Start crawl from a root URL.
 - Crawl only URLs supplied from an uploaded `.txt` or `.csv` file.
 - Discover internal links from `<a href>`.
+- Discover page resources for an Internal-All-style baseline:
+  - images and `srcset`
+  - stylesheets
+  - scripts
+  - iframes and frames
+  - media/document embeds
+  - CSS `@import`
+  - meta refresh targets
+  - redirect final URLs
+- Configure resource discovery in `crawler.config.json` by URL type, extension, include pattern, and exclude pattern.
 - Resolve relative URLs.
 - Normalize URLs:
   - Removes hash fragments.
@@ -285,6 +297,33 @@ src-tauri/target/release/bundle/dmg/Scout SEO Crawler_0.1.0_aarch64.dmg
   - images
   - sitemaps
   - PageSpeed results
+
+### URL Type Configuration
+
+`crawler.config.json` controls which URL families enter the crawl queue:
+
+```json
+{
+  "urlTypes": {
+    "htmlLinks": true,
+    "images": true,
+    "stylesheets": true,
+    "scripts": true,
+    "iframes": true,
+    "media": true,
+    "documents": true,
+    "cssImports": true,
+    "cssUrls": false,
+    "metaRefresh": true,
+    "redirectFinalUrls": true
+  },
+  "excludeExtensions": [],
+  "includeUrlPatterns": [],
+  "excludeUrlPatterns": []
+}
+```
+
+Set any URL type to `false` to exclude it from discovery. `cssUrls` is off by default because recursively crawling every CSS background/image URL can make the crawl broader than typical SEO Internal-All exports. Turn it on when you want deeper asset discovery.
 
 ### HTTP Analysis
 
