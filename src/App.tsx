@@ -7,11 +7,14 @@ import type { CrawlImage, CrawlLink, CrawlPage, CrawlPsiRecord, CrawlSettings, C
 const defaultSettings: CrawlSettings = {
   rootUrl: "https://example.com",
   crawlMode: "site",
+  speedPreset: "max",
+  crawlScope: "internal-all",
   specificUrls: [],
   maxUrls: 500,
   maxDepth: 5,
-  concurrency: 6,
-  delayMs: 100,
+  concurrency: 64,
+  delayMs: 0,
+  timeoutMs: 8000,
   userAgent: "ScoutSEO/0.1 (+https://example.com/bot)",
   respectRobots: true,
   minWordCount: 300,
@@ -20,6 +23,14 @@ const defaultSettings: CrawlSettings = {
   psiMaxUrls: 5,
   psiMobile: true,
   psiDesktop: true
+};
+
+const speedPresets: Record<CrawlSettings["speedPreset"], Pick<CrawlSettings, "concurrency" | "delayMs" | "timeoutMs">> = {
+  polite: { concurrency: 2, delayMs: 250, timeoutMs: 15000 },
+  balanced: { concurrency: 8, delayMs: 50, timeoutMs: 12000 },
+  fast: { concurrency: 16, delayMs: 0, timeoutMs: 10000 },
+  aggressive: { concurrency: 32, delayMs: 0, timeoutMs: 8000 },
+  max: { concurrency: 64, delayMs: 0, timeoutMs: 8000 }
 };
 
 const emptyStats: CrawlStats = {
@@ -453,6 +464,14 @@ export function App() {
     }));
   }
 
+  function updateSpeedPreset(speedPreset: CrawlSettings["speedPreset"]) {
+    setSettings((current) => ({
+      ...current,
+      speedPreset,
+      ...speedPresets[speedPreset]
+    }));
+  }
+
   async function handlePreviousCsvUpload(file: File | undefined) {
     if (!file) return;
 
@@ -503,6 +522,26 @@ export function App() {
           </select>
         </label>
 
+        <label>
+          Speed
+          <select value={settings.speedPreset} onChange={(event) => updateSpeedPreset(event.target.value as CrawlSettings["speedPreset"])}>
+            <option value="max">Max speed</option>
+            <option value="aggressive">Aggressive</option>
+            <option value="fast">Fast</option>
+            <option value="balanced">Balanced</option>
+            <option value="polite">Polite</option>
+          </select>
+        </label>
+
+        <label>
+          Crawl scope
+          <select value={settings.crawlScope} onChange={(event) => setSettings({ ...settings, crawlScope: event.target.value as CrawlSettings["crawlScope"] })}>
+            <option value="html-only">HTML only</option>
+            <option value="internal-all">Internal all baseline</option>
+            <option value="all-resources">All resources</option>
+          </select>
+        </label>
+
         {settings.crawlMode === "site" ? (
           <label>
             Root URL
@@ -544,13 +583,18 @@ export function App() {
         <div className="two-col">
           <label>
             Threads
-            <input type="number" min="1" max="32" value={settings.concurrency} onChange={(event) => setSettings({ ...settings, concurrency: Number(event.target.value) })} />
+            <input type="number" min="1" max="128" value={settings.concurrency} onChange={(event) => setSettings({ ...settings, speedPreset: "max", concurrency: Number(event.target.value) })} />
           </label>
           <label>
-            Delay
-            <input type="number" min="0" value={settings.delayMs} onChange={(event) => setSettings({ ...settings, delayMs: Number(event.target.value) })} />
+            Request delay
+            <input type="number" min="0" value={settings.delayMs} onChange={(event) => setSettings({ ...settings, speedPreset: "max", delayMs: Number(event.target.value) })} />
           </label>
         </div>
+
+        <label>
+          Timeout ms
+          <input type="number" min="1000" value={settings.timeoutMs} onChange={(event) => setSettings({ ...settings, speedPreset: "max", timeoutMs: Number(event.target.value) })} />
+        </label>
 
         <label>
           User agent
@@ -1329,7 +1373,7 @@ function diffList(previous: string[], current: string[]) {
 }
 
 function getReportHeaders(report: ReportTab) {
-  if (report === "Metadata") return ["URL", "Title", "Title Count", "Description", "Description Count", "Canonical", "Issues"];
+  if (report === "Metadata") return ["URL", "Title", "Title Length", "Title Count", "Description", "Description Length", "Description Count", "Canonical", "Issues"];
   if (report === "Indexability") return ["URL", "Status", "Indexable", "Noindex", "Nofollow", "Canonicalized", "Reasons"];
   if (report === "Headings") return ["URL", "H1 Count", "H2 Count", "Heading Path", "Issues"];
   if (report === "Open Graph") return ["URL", "OG Title", "OG Description", "OG URL", "OG Type", "OG Image", "Issues"];
@@ -1339,7 +1383,28 @@ function getReportHeaders(report: ReportTab) {
   if (report === "Sitemaps") return ["Sitemap URL", "URL", "Status", "Indexable", "Coverage", "Issues"];
   if (report === "PageSpeed") return ["URL", "Strategy", "Score", "FCP", "Speed Index", "LCP", "TBT", "CLS", "INP", "Issues"];
   if (report === "Compare") return ["URL", "Change", "Status", "Title", "Description", "Canonical", "Indexability", "Words", "New Issues", "Fixed Issues"];
-  return ["URL", "Status", "Depth", "Title", "Description", "Canonical", "Words", "Issues", "Indexable", "Indexability Reasons", "Inlinks", "Outlinks", "Referrers", "Images"];
+  return [
+    "URL",
+    "Status",
+    "Depth",
+    "Response Time",
+    "Title",
+    "Title Length",
+    "Description",
+    "Description Length",
+    "Canonical",
+    "Redirect URL",
+    "Redirect Type",
+    "Words",
+    "Issues",
+    "Indexable",
+    "Indexability Reasons",
+    "Inlinks",
+    "Outlinks",
+    "External Outlinks",
+    "Referrers",
+    "Images"
+  ];
 }
 
 function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[], images: CrawlImage[], sitemaps: CrawlSitemapRecord[], psiResults: CrawlPsiRecord[], compareRows: CompareRow[]) {
@@ -1348,8 +1413,10 @@ function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[]
       <tr key={`metadata-${page.url}`}>
         <td>{page.url}</td>
         <td>{page.title || "Missing"}</td>
+        <td>{page.titleLength ?? page.metadata?.titleLength ?? page.title.length}</td>
         <td>{page.metadata?.counts.titles ?? 0}</td>
         <td>{page.description || "Missing"}</td>
+        <td>{page.descriptionLength ?? page.metadata?.descriptionLength ?? page.description.length}</td>
         <td>{page.metadata?.counts.descriptions ?? 0}</td>
         <td>{page.canonical || "Missing"}</td>
         <td>{issueText(page, ["title", "description", "canonical", "Duplicate"])}</td>
@@ -1499,15 +1566,21 @@ function getReportRows(report: ReportTab, pages: CrawlPage[], links: CrawlLink[]
       <td>{page.url}</td>
       <td>{page.status ?? "Fail"}</td>
       <td>{page.depth}</td>
+      <td>{formatResponseTime(page.responseTimeMs)}</td>
       <td>{page.title || "Missing"}</td>
+      <td>{page.titleLength ?? page.title.length}</td>
       <td>{page.description || "Missing"}</td>
+      <td>{page.descriptionLength ?? page.description.length}</td>
       <td>{page.canonical || "Missing"}</td>
+      <td>{page.redirectUrl || ""}</td>
+      <td>{page.redirectType || ""}</td>
       <td>{page.wordCount}</td>
       <td>{page.issues.join(", ")}</td>
       <td>{page.indexability ? (page.indexability.isIndexable ? "Yes" : "No") : "Unknown"}</td>
       <td>{page.indexability?.reasons.join(", ") ?? ""}</td>
       <td>{page.incomingInternalLinks ?? 0}</td>
       <td>{page.outgoingInternalLinks ?? 0}</td>
+      <td>{page.externalOutgoingLinks ?? 0}</td>
       <td>{page.referrerUrls?.join(", ") ?? ""}</td>
       <td>{page.imageCount ?? 0}</td>
     </tr>
@@ -1524,6 +1597,10 @@ function firstValue(values?: string[]) {
 
 function scoreText(score: number | null) {
   return score === null ? "Error" : String(score);
+}
+
+function formatResponseTime(responseTimeMs?: number) {
+  return typeof responseTimeMs === "number" && responseTimeMs > 0 ? `${responseTimeMs} ms` : "";
 }
 
 function emptyRow(report: ReportTab, message: string) {

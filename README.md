@@ -17,6 +17,7 @@ This repository currently contains a working MVP scaffold with:
 - Metadata extraction.
 - robots.txt support.
 - CSV export.
+- CSV exports are written to the user's default `Downloads` folder.
 - macOS app and DMG build support.
 
 Phase 1 data-model foundation is now in place. The Node sidecar keeps structured in-memory stores for pages, links, headings, metadata, indexability, images, sitemaps, and PageSpeed results. Some later report types are still placeholders, but the architecture now has the right data buckets for the next phases.
@@ -282,7 +283,13 @@ src-tauri/target/release/bundle/dmg/Scout SEO Crawler_0.1.0_aarch64.dmg
 - Respect max depth.
 - Concurrent crawling.
 - Configurable concurrency.
-- Configurable delay between queue pumps.
+- Speed presets for polite, balanced, fast, aggressive, and max-speed crawling.
+- Configurable request delay.
+- Configurable request timeout.
+- Crawl scope presets:
+  - HTML only
+  - Internal all baseline
+  - All resources
 - Request timeout handling.
 - Pause crawl.
 - Resume crawl.
@@ -328,6 +335,8 @@ Set any URL type to `false` to exclude it from discovery. `cssUrls` is off by de
 ### HTTP Analysis
 
 - Captures final URL after redirects.
+- Captures first redirect URL and redirect type.
+- Captures response time in milliseconds.
 - Captures HTTP status code.
 - Tracks failed requests.
 - Flags HTTP error pages.
@@ -418,15 +427,21 @@ Current validation rules:
   - URL
   - Status
   - Depth
+  - Response time
   - Title
+  - Title length
   - Description
+  - Description length
   - Canonical
+  - Redirect URL
+  - Redirect type
   - Word count
   - Issues
   - Indexable
   - Indexability reasons
   - Inlinks
   - Outlinks
+  - External outlinks
   - Referrers
   - Image count
 - Report tabs:
@@ -461,7 +476,9 @@ Current validation rules:
 
 ### Export
 
-- CSV export for crawled page data.
+- CSV export for crawled page data to the user's default `Downloads` folder.
+- Export includes every unique report-tab field in a page-level CSV: overview, metadata, indexability, headings, Open Graph, structured data, links, images, sitemaps, and PageSpeed.
+- Multi-row tab data such as links, images, sitemap matches, and PageSpeed strategy results are aggregated into semicolon-separated columns per crawled URL so the file remains easy to compare between runs.
 - Export includes:
   - Export version
   - URL

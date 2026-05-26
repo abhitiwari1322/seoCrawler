@@ -3,11 +3,14 @@ export type CrawlStatus = "idle" | "running" | "paused" | "stopped" | "complete"
 export interface CrawlSettings {
   rootUrl: string;
   crawlMode: "site" | "url-list";
+  speedPreset: "polite" | "balanced" | "fast" | "aggressive" | "max";
+  crawlScope: "html-only" | "internal-all" | "all-resources";
   specificUrls: string[];
   maxUrls: number;
   maxDepth: number;
   concurrency: number;
   delayMs: number;
+  timeoutMs: number;
   userAgent: string;
   respectRobots: boolean;
   minWordCount: number;
@@ -46,7 +49,9 @@ export interface StructuredDataBlock {
 
 export interface CrawlMetadata {
   title: string;
+  titleLength?: number;
   description: string;
+  descriptionLength?: number;
   canonical: string;
   robotsMeta: string;
   xRobotsTag: string;
@@ -136,7 +141,9 @@ export interface CrawlPage {
   status: number | null;
   contentType: string;
   title: string;
+  titleLength?: number;
   description: string;
+  descriptionLength?: number;
   canonical: string;
   h1: string[];
   h2: string[];
@@ -144,11 +151,15 @@ export interface CrawlPage {
   metadata?: CrawlMetadata;
   indexability?: CrawlIndexability;
   wordCount: number;
+  responseTimeMs?: number;
+  redirectUrl?: string;
+  redirectType?: string;
   issues: string[];
   discoveredFrom?: string;
   referrerUrls?: string[];
   incomingInternalLinks?: number;
   outgoingInternalLinks?: number;
+  externalOutgoingLinks?: number;
   imageCount?: number;
 }
 

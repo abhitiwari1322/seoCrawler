@@ -3,7 +3,7 @@ import { createInterface } from "node:readline";
 import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import * as cheerio from "cheerio";
 import robotsParser from "robots-parser";
 
@@ -59,6 +59,7 @@ class Crawler {
   async start(settings) {
     this.reset();
     this.settings = settings;
+    this.config = applyCrawlScope(loadCrawlerConfig(), settings.crawlScope);
     const seedUrls = this.prepareSeedUrls(settings);
     if (seedUrls.length === 0) {
       emit("error", "No valid URLs found to crawl.");
@@ -232,7 +233,12 @@ class Crawler {
       this.crawl(item).finally(() => {
         this.active -= 1;
         if (this.status === "running") {
-          setTimeout(() => this.pump(), this.settings.delayMs);
+          const delayMs = Math.max(0, Number(this.settings.delayMs) || 0);
+          if (delayMs > 0) {
+            setTimeout(() => this.pump(), delayMs);
+          } else {
+            this.pump();
+          }
         }
         if (this.queue.length === 0 && this.active === 0 && this.status === "running") {
           void this.finish();
@@ -243,18 +249,24 @@ class Crawler {
 
   async crawl(item) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
+    const timeout = setTimeout(() => controller.abort(), Math.max(1000, Number(this.settings.timeoutMs) || 8000));
+    const startedAt = Date.now();
     try {
-      const response = await fetch(item.url, {
-        redirect: "follow",
+      const fetchResult = await fetchWithRedirects(item.url, {
         signal: controller.signal,
         headers: { "user-agent": this.settings.userAgent }
       });
+      const { response, redirectUrl, redirectType } = fetchResult;
+      const responseTimeMs = Date.now() - startedAt;
       const contentType = response.headers.get("content-type") ?? "";
       const isHtml = contentType.includes("text/html");
       const isCss = isCssContentType(contentType);
       const body = isHtml || isCss ? await response.text() : "";
-      const page = this.extractPage(item, response, isHtml ? body : "", contentType);
+      const page = this.extractPage(item, response, isHtml ? body : "", contentType, {
+        responseTimeMs,
+        redirectUrl,
+        redirectType
+      });
       this.storePage(page);
       this.pages.push(page);
       emit("page", page);
@@ -275,6 +287,11 @@ class Crawler {
         h1: [],
         h2: [],
         wordCount: 0,
+        titleLength: 0,
+        descriptionLength: 0,
+        responseTimeMs: Date.now() - startedAt,
+        redirectUrl: "",
+        redirectType: "",
         issues: ["Request failed"],
         discoveredFrom: item.discoveredFrom
       };
@@ -288,7 +305,7 @@ class Crawler {
     }
   }
 
-  extractPage(item, response, html, contentType) {
+  extractPage(item, response, html, contentType, network = {}) {
     const $ = cheerio.load(html || "");
     const titleTags = $("title").map((_, el) => clean($(el).text())).get().filter(Boolean);
     const descriptionTags = $('meta[name="description"]').map((_, el) => clean($(el).attr("content") ?? "")).get();
@@ -344,14 +361,18 @@ class Crawler {
       status: response.status,
       contentType,
       title,
+      titleLength: title.length,
       description,
+      descriptionLength: description.length,
       canonical,
       h1,
       h2,
       headings,
       metadata: {
         title,
+        titleLength: title.length,
         description,
+        descriptionLength: description.length,
         canonical,
         robotsMeta,
         xRobotsTag,
@@ -367,11 +388,15 @@ class Crawler {
       },
       indexability,
       wordCount,
+      responseTimeMs: network.responseTimeMs ?? 0,
+      redirectUrl: network.redirectUrl ?? "",
+      redirectType: network.redirectType ?? "",
       issues,
       discoveredFrom: item.discoveredFrom,
       referrerUrls: item.discoveredFrom ? [item.discoveredFrom] : [],
       outgoingInternalLinks: 0,
       incomingInternalLinks: 0,
+      externalOutgoingLinks: 0,
       imageCount: pageImages.length
     };
   }
@@ -546,26 +571,178 @@ class Crawler {
   }
 
   async exportCsv(report) {
-    const dir = join(tmpdir(), "scout-seo-exports");
-    await mkdir(dir, { recursive: true });
+    const downloadsDir = join(homedir(), "Downloads");
+    const fallbackDir = join(tmpdir(), "scout-seo-exports");
+    const dir = await ensureExportDir(downloadsDir, fallbackDir);
     const filePath = join(dir, `${report}-${Date.now()}.csv`);
-    const header = ["exportVersion", "url", "finalUrl", "status", "depth", "title", "description", "canonical", "indexable", "wordCount", "incomingInternalLinks", "outgoingInternalLinks", "referrerUrls", "issues"];
-    const rows = this.pages.map((page) => [
-      "1",
-      page.url,
-      page.finalUrl,
-      page.status ?? "",
-      page.depth,
-      page.title,
-      page.description,
-      page.canonical,
-      page.indexability?.isIndexable ?? "",
-      page.wordCount,
-      page.incomingInternalLinks ?? 0,
-      page.outgoingInternalLinks ?? 0,
-      (page.referrerUrls ?? []).join("; "),
-      page.issues.join("; ")
-    ]);
+    const linksBySource = groupBy(this.store.links, (link) => link.sourceUrl);
+    const imagesByPage = groupBy(this.store.images, (image) => image.pageUrl);
+    const sitemapsByUrl = groupBy(this.store.sitemaps, (record) => record.url);
+    const psiByUrl = groupBy(Array.from(this.store.psiResults.values()), (record) => record.url);
+    const header = [
+      "exportVersion",
+      "url",
+      "finalUrl",
+      "status",
+      "depth",
+      "contentType",
+      "responseTimeMs",
+      "title",
+      "titleLength",
+      "titleCount",
+      "description",
+      "descriptionLength",
+      "descriptionCount",
+      "canonical",
+      "canonicalCount",
+      "redirectUrl",
+      "redirectType",
+      "indexable",
+      "noindex",
+      "nofollow",
+      "canonicalized",
+      "indexabilityReasons",
+      "wordCount",
+      "h1Count",
+      "h2Count",
+      "headingPath",
+      "ogTitle",
+      "ogDescription",
+      "ogUrl",
+      "ogType",
+      "ogImage",
+      "jsonLdBlocks",
+      "invalidJsonLdBlocks",
+      "structuredDataErrors",
+      "incomingInternalLinks",
+      "outgoingInternalLinks",
+      "externalOutgoingLinks",
+      "referrerUrls",
+      "outboundLinkDestinations",
+      "outboundLinkStatuses",
+      "outboundLinkFinalUrls",
+      "outboundLinkAnchorTexts",
+      "outboundLinkIssues",
+      "imageCount",
+      "imageUrls",
+      "imageSrcsets",
+      "imageAlts",
+      "imageHasAlt",
+      "imageWidths",
+      "imageHeights",
+      "imageLazy",
+      "imageIssues",
+      "sitemapUrls",
+      "sitemapStatus",
+      "sitemapIndexable",
+      "sitemapCoverage",
+      "sitemapIssues",
+      "psiMobileScore",
+      "psiMobileFcp",
+      "psiMobileSpeedIndex",
+      "psiMobileLcp",
+      "psiMobileTbt",
+      "psiMobileCls",
+      "psiMobileInp",
+      "psiMobileIssues",
+      "psiDesktopScore",
+      "psiDesktopFcp",
+      "psiDesktopSpeedIndex",
+      "psiDesktopLcp",
+      "psiDesktopTbt",
+      "psiDesktopCls",
+      "psiDesktopInp",
+      "psiDesktopIssues",
+      "issues"
+    ];
+    const rows = this.pages.map((page) => {
+      const outboundLinks = linksBySource.get(page.url) ?? [];
+      const pageImages = imagesByPage.get(page.url) ?? [];
+      const sitemapRecords = sitemapsByUrl.get(page.url) ?? [];
+      const psiRecords = psiByUrl.get(page.url) ?? [];
+      const mobilePsi = psiRecords.find((record) => record.strategy === "mobile");
+      const desktopPsi = psiRecords.find((record) => record.strategy === "desktop");
+      const jsonLdBlocks = page.metadata?.structuredData.jsonLd ?? [];
+      const invalidJsonLdBlocks = jsonLdBlocks.filter((block) => !block.valid);
+      const openGraph = page.metadata?.openGraph ?? {};
+
+      return [
+        "2",
+        page.url,
+        page.finalUrl,
+        page.status ?? "",
+        page.depth,
+        page.contentType,
+        page.responseTimeMs ?? 0,
+        page.title,
+        page.titleLength ?? page.title?.length ?? 0,
+        page.metadata?.counts.titles ?? 0,
+        page.description,
+        page.descriptionLength ?? page.description?.length ?? 0,
+        page.metadata?.counts.descriptions ?? 0,
+        page.canonical,
+        page.metadata?.counts.canonicals ?? 0,
+        page.redirectUrl ?? "",
+        page.redirectType ?? "",
+        page.indexability?.isIndexable ?? "",
+        page.indexability?.hasNoindex ?? "",
+        page.indexability?.hasNofollow ?? "",
+        page.indexability?.canonicalized ?? "",
+        joinValues(page.indexability?.reasons),
+        page.wordCount,
+        page.h1.length,
+        page.h2.length,
+        joinValues(page.headings?.map((heading) => `H${heading.level}: ${heading.text}`)),
+        firstMetaValue(openGraph["og:title"]),
+        firstMetaValue(openGraph["og:description"]),
+        firstMetaValue(openGraph["og:url"]),
+        firstMetaValue(openGraph["og:type"]),
+        firstMetaValue(openGraph["og:image"]),
+        jsonLdBlocks.length,
+        invalidJsonLdBlocks.length,
+        joinValues(invalidJsonLdBlocks.flatMap((block) => block.errors)),
+        page.incomingInternalLinks ?? 0,
+        page.outgoingInternalLinks ?? 0,
+        page.externalOutgoingLinks ?? 0,
+        joinValues(page.referrerUrls),
+        joinValues(outboundLinks.map((link) => link.destinationUrl || "Missing")),
+        joinValues(outboundLinks.map((link) => link.destinationStatus ?? "Unknown")),
+        joinValues(outboundLinks.map((link) => link.finalDestinationUrl)),
+        joinValues(outboundLinks.map((link) => link.anchorText)),
+        joinValues(outboundLinks.flatMap((link) => link.issues)),
+        page.imageCount ?? pageImages.length,
+        joinValues(pageImages.map((image) => image.src || "Missing")),
+        joinValues(pageImages.map((image) => image.srcset)),
+        joinValues(pageImages.map((image) => image.alt)),
+        joinValues(pageImages.map((image) => image.hasAltAttribute ? "Yes" : "No")),
+        joinValues(pageImages.map((image) => image.width || "Missing")),
+        joinValues(pageImages.map((image) => image.height || "Missing")),
+        joinValues(pageImages.map((image) => image.isLazyLoaded ? "Yes" : "No")),
+        joinValues(pageImages.flatMap((image) => image.issues)),
+        joinValues(sitemapRecords.map((record) => record.sitemapUrl)),
+        joinValues(sitemapRecords.map((record) => record.status ?? "Unknown")),
+        joinValues(sitemapRecords.map((record) => record.indexable === null ? "Unknown" : record.indexable ? "Yes" : "No")),
+        joinValues(sitemapRecords.map((record) => record.coverage)),
+        joinValues(sitemapRecords.flatMap((record) => record.issues)),
+        psiValue(mobilePsi, "performanceScore"),
+        mobilePsi?.fcp ?? "",
+        mobilePsi?.speedIndex ?? "",
+        mobilePsi?.lcp ?? "",
+        mobilePsi?.tbt ?? "",
+        mobilePsi?.cls ?? "",
+        mobilePsi?.inp ?? "",
+        joinValues(mobilePsi?.issues),
+        psiValue(desktopPsi, "performanceScore"),
+        desktopPsi?.fcp ?? "",
+        desktopPsi?.speedIndex ?? "",
+        desktopPsi?.lcp ?? "",
+        desktopPsi?.tbt ?? "",
+        desktopPsi?.cls ?? "",
+        desktopPsi?.inp ?? "",
+        joinValues(desktopPsi?.issues),
+        joinValues(page.issues)
+      ];
+    });
     await writeFile(filePath, [header, ...rows].map(toCsvRow).join("\n"));
     emit("exported", { report, filePath });
     emit("log", `Exported ${report} CSV to ${filePath}`);
@@ -574,10 +751,17 @@ class Crawler {
   enrichPageLinkCounts() {
     const incoming = new Map();
     const outgoing = new Map();
+    const externalOutgoing = new Map();
     const referrers = new Map();
 
     for (const link of this.store.links) {
-      if (!link.isInternal || !link.destinationUrl) continue;
+      if (!link.destinationUrl) continue;
+
+      if (!link.isInternal) {
+        externalOutgoing.set(link.sourceUrl, (externalOutgoing.get(link.sourceUrl) ?? 0) + 1);
+        continue;
+      }
+
       outgoing.set(link.sourceUrl, (outgoing.get(link.sourceUrl) ?? 0) + 1);
       incoming.set(link.destinationUrl, (incoming.get(link.destinationUrl) ?? 0) + 1);
       if (!referrers.has(link.destinationUrl)) referrers.set(link.destinationUrl, new Set());
@@ -588,6 +772,7 @@ class Crawler {
       ...page,
       incomingInternalLinks: incoming.get(page.url) ?? 0,
       outgoingInternalLinks: outgoing.get(page.url) ?? 0,
+      externalOutgoingLinks: externalOutgoing.get(page.url) ?? 0,
       referrerUrls: Array.from(referrers.get(page.url) ?? new Set(page.discoveredFrom ? [page.discoveredFrom] : []))
     }));
 
@@ -694,6 +879,53 @@ function createEmptyStore() {
   };
 }
 
+async function ensureExportDir(primaryDir, fallbackDir) {
+  try {
+    await mkdir(primaryDir, { recursive: true });
+    return primaryDir;
+  } catch {
+    await mkdir(fallbackDir, { recursive: true });
+    return fallbackDir;
+  }
+}
+
+async function fetchWithRedirects(url, options, maxRedirects = 10) {
+  let currentUrl = url;
+  let redirectUrl = "";
+  let redirectType = "";
+
+  for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
+    const response = await fetch(currentUrl, {
+      ...options,
+      redirect: "manual"
+    });
+
+    if (!isRedirectStatus(response.status)) {
+      return { response, redirectUrl, redirectType };
+    }
+
+    const location = response.headers.get("location");
+    if (!location) return { response, redirectUrl, redirectType };
+
+    const nextUrl = new URL(location, currentUrl).href;
+    redirectUrl = nextUrl;
+    redirectType = redirectType || redirectTypeLabel(response.status);
+    currentUrl = nextUrl;
+  }
+
+  throw new Error("Too many redirects");
+}
+
+function isRedirectStatus(status) {
+  return status >= 300 && status < 400;
+}
+
+function redirectTypeLabel(status) {
+  if (status === 301 || status === 308) return `${status} permanent`;
+  if (status === 302 || status === 303 || status === 307) return `${status} temporary`;
+  return `${status} redirect`;
+}
+
 function loadCrawlerConfig() {
   try {
     const config = JSON.parse(readFileSync("crawler.config.json", "utf8"));
@@ -711,6 +943,49 @@ function loadCrawlerConfig() {
   } catch {
     return DEFAULT_CRAWLER_CONFIG;
   }
+}
+
+function applyCrawlScope(config, crawlScope = "internal-all") {
+  const scopedConfig = {
+    ...config,
+    urlTypes: {
+      ...config.urlTypes
+    }
+  };
+
+  if (crawlScope === "html-only") {
+    scopedConfig.urlTypes = {
+      ...scopedConfig.urlTypes,
+      images: false,
+      stylesheets: false,
+      scripts: false,
+      iframes: false,
+      media: false,
+      documents: false,
+      cssImports: false,
+      cssUrls: false,
+      metaRefresh: true,
+      redirectFinalUrls: true
+    };
+  }
+
+  if (crawlScope === "all-resources") {
+    scopedConfig.urlTypes = {
+      ...scopedConfig.urlTypes,
+      images: true,
+      stylesheets: true,
+      scripts: true,
+      iframes: true,
+      media: true,
+      documents: true,
+      cssImports: true,
+      cssUrls: true,
+      metaRefresh: true,
+      redirectFinalUrls: true
+    };
+  }
+
+  return scopedConfig;
 }
 
 function clean(value) {
@@ -1083,6 +1358,32 @@ function classifyLink($, element) {
 
 function toCsvRow(row) {
   return row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",");
+}
+
+function groupBy(items, getKey) {
+  const groups = new Map();
+  for (const item of items) {
+    const key = getKey(item);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  return groups;
+}
+
+function joinValues(values = []) {
+  return values
+    .filter((value) => value !== undefined && value !== null && value !== "")
+    .map(String)
+    .join("; ");
+}
+
+function firstMetaValue(values = []) {
+  return values.find(Boolean) ?? "";
+}
+
+function psiValue(record, key) {
+  if (!record) return "";
+  return record[key] ?? "";
 }
 
 const crawler = new Crawler();
