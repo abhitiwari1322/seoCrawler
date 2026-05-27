@@ -5,10 +5,20 @@ import { deflateSync } from "node:zlib";
 const outDir = join("src-tauri", "icons");
 mkdirSync(outDir, { recursive: true });
 
-writeFileSync(join(outDir, "icon.png"), createPng(512));
-writeFileSync(join(outDir, "32x32.png"), createPng(32));
-writeFileSync(join(outDir, "128x128.png"), createPng(128));
-writeFileSync(join(outDir, "128x128@2x.png"), createPng(256));
+const png32 = createPng(32);
+const png128 = createPng(128);
+const png256 = createPng(256);
+const png512 = createPng(512);
+
+writeFileSync(join(outDir, "icon.png"), png512);
+writeFileSync(join(outDir, "32x32.png"), png32);
+writeFileSync(join(outDir, "128x128.png"), png128);
+writeFileSync(join(outDir, "128x128@2x.png"), png256);
+writeFileSync(join(outDir, "icon.ico"), createIco([
+  { size: 32, png: png32 },
+  { size: 128, png: png128 },
+  { size: 256, png: png256 }
+]));
 
 function createPng(size) {
   const pixels = Buffer.alloc((size * 4 + 1) * size);
@@ -94,6 +104,33 @@ function u32(value) {
   const buffer = Buffer.alloc(4);
   buffer.writeUInt32BE(value >>> 0);
   return buffer;
+}
+
+function createIco(images) {
+  const headerSize = 6;
+  const directoryEntrySize = 16;
+  const directorySize = headerSize + images.length * directoryEntrySize;
+  const header = Buffer.alloc(directorySize);
+  let imageOffset = directorySize;
+
+  header.writeUInt16LE(0, 0);
+  header.writeUInt16LE(1, 2);
+  header.writeUInt16LE(images.length, 4);
+
+  images.forEach(({ size, png }, index) => {
+    const entryOffset = headerSize + index * directoryEntrySize;
+    header[entryOffset] = size >= 256 ? 0 : size;
+    header[entryOffset + 1] = size >= 256 ? 0 : size;
+    header[entryOffset + 2] = 0;
+    header[entryOffset + 3] = 0;
+    header.writeUInt16LE(1, entryOffset + 4);
+    header.writeUInt16LE(32, entryOffset + 6);
+    header.writeUInt32LE(png.length, entryOffset + 8);
+    header.writeUInt32LE(imageOffset, entryOffset + 12);
+    imageOffset += png.length;
+  });
+
+  return Buffer.concat([header, ...images.map(({ png }) => png)]);
 }
 
 function crc32(buffer) {
